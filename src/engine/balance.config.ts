@@ -261,7 +261,7 @@ export const BALANCE = {
     'distributed-cognition': 1.2e14,
   } as Record<import('../lib/game').SkillId, number>,
 
-  // Per-stage click value as fraction of current host health.
+  // Per-stage click value as fraction of max host health.
   // Ensures clicking remains meaningful at every stage, independent of BPS.
   // Parasite gets 1.5x (same ratio as CLICK_BPS_FRACTION_PARASITE vs DEFAULT).
   CLICK_HOST_HEALTH_FRACTION_DEFAULT: [

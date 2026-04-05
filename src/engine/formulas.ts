@@ -519,13 +519,14 @@ export function getBaseClickValue(state: GameState): Decimal {
   const referenceBps = getUnpenalizedBps(state)
   const bpsScaled = referenceBps.mul(bpsFraction)
 
-  // Stage-relative click floor: a fraction of current host health.
-  // Ensures clicking remains meaningful at every stage, independent of BPS.
+  // Stage-relative click floor: a fraction of max host health.
+  // This keeps click value stable over the course of a host instead of
+  // weakening as the remaining host health approaches zero.
   const hostHealthFractions = state.strain === 'parasite'
     ? BALANCE.CLICK_HOST_HEALTH_FRACTION_PARASITE
     : BALANCE.CLICK_HOST_HEALTH_FRACTION_DEFAULT
   const stageIndex = Math.min(state.currentStage - 1, hostHealthFractions.length - 1)
-  const hostHealthFloor = state.hostHealth.mul(hostHealthFractions[stageIndex])
+  const hostHealthFloor = state.hostMaxHealth.mul(hostHealthFractions[stageIndex])
 
   // Take the higher of BPS-scaled or host-health floor.
   let value = Decimal.max(new Decimal(1), Decimal.max(bpsScaled, hostHealthFloor))

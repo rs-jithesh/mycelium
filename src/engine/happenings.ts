@@ -127,6 +127,10 @@ function getGeneratorNameByIndex(index: number): string {
   return generatorDefinitions[index]?.name ?? `Tier ${index + 1}`
 }
 
+function isUpgradeRequirementMet(state: GameState, upgrade: (typeof upgradeDefinitions)[number]): boolean {
+  return state.generators[upgrade.requiredGenerator].owned >= upgrade.requiredOwned
+}
+
 function getGeneratorNameById(generatorId: string): string {
   return generatorDefinitions.find((generator) => generator.id === generatorId)?.name ?? generatorId
 }
@@ -807,9 +811,7 @@ export function checkVisibilityUnlocks(state: GameState, now = Date.now()): Game
     next = unlockVisibilityFlag(next, 'bpsDisplay')
   }
 
-  if (!next.visibility.upgradePanel && upgradeDefinitions.some(
-    (upg) => next.generators[upg.requiredGenerator].owned >= upg.requiredOwned
-  )) {
+  if (!next.visibility.upgradePanel && upgradeDefinitions.some((upgrade) => isUpgradeRequirementMet(next, upgrade))) {
     next = unlockVisibilityFlag(next, 'upgradePanel')
     next = {
       ...next,
@@ -1321,7 +1323,9 @@ function getAffordableQuantity(
 export function buyUpgradeAction(state: GameState, upgradeId: UpgradeId): GameState {
   const definition = upgradeDefinitions.find((d) => d.id === upgradeId)!
 
-  if (state.upgrades[upgradeId] || state.biomass.lt(definition.cost)) return state
+  if (state.upgrades[upgradeId] || !isUpgradeRequirementMet(state, definition) || state.biomass.lt(definition.cost)) {
+    return state
+  }
 
   const next = spendBiomass(
     {
