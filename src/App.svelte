@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
+  import { fade, fly } from 'svelte/transition'
   import TerminalButton from './lib/ui/TerminalButton.svelte'
   import TerminalPanel from './lib/ui/TerminalPanel.svelte'
-  import TerminalProgressBar from './lib/ui/TerminalProgressBar.svelte'
   import TypewriterLog from './lib/ui/TypewriterLog.svelte'
   import SignalPanel from './lib/SignalPanel.svelte'
+  import DefenseToast from './components/DefenseToast.svelte'
   import { wikiEntries, wikiSections } from './lib/wiki'
-  import { game } from './stores/gameStore'
+  import { game, _pendingOfflineNarrative } from './stores/gameStore'
   import {
     canReleaseSpores,
     getGeneticMemoryBonusPercent,
@@ -28,12 +29,13 @@
   import {
     countermeasureDefinitions,
     generatorDefinitions,
+    hostEchoDefinitions,
     hostDefinitions,
     skillDefinitions,
     strainDefinitions,
     upgradeDefinitions,
   } from './lib/game'
-  import type { CountermeasureId, DefenseEventId, GeneratorId } from './lib/game'
+  import type { CountermeasureId, DefenseEventId, GeneratorId, HostEchoDefinition, OfflineEvent, OfflineNarrative } from './lib/game'
   import { formatBiomass, formatBPS } from './utils/formatNumber'
 
   type ViewId = 'terminal' | 'evolution' | 'spore' | 'wiki'
@@ -47,6 +49,25 @@
   const statBranches = ['virulence', 'resilience', 'complexity'] as const
   const HOLD_DELAY_MS = 300
   const HOLD_INTERVAL_MS = 90
+  const defenseThreatWindows: Array<{ id: DefenseEventId; minStage: number; maxStage: number }> = [
+    { id: 'drought', minStage: 1, maxStage: 8 },
+    { id: 'beetle-disruption', minStage: 1, maxStage: 8 },
+    { id: 'cold-snap', minStage: 3, maxStage: 4 },
+    { id: 'spore-competition', minStage: 5, maxStage: 8 },
+    { id: 'immune-response', minStage: 5, maxStage: 8 },
+    { id: 'desiccation-pulse', minStage: 1, maxStage: 8 },
+    { id: 'antifungal-exudates', minStage: 2, maxStage: 7 },
+    { id: 'microbial-rivalry', minStage: 2, maxStage: 6 },
+    { id: 'uv-surge', minStage: 1, maxStage: 5 },
+    { id: 'lignin-fortification', minStage: 3, maxStage: 8 },
+    { id: 'root-allelopathy', minStage: 4, maxStage: 7 },
+    { id: 'insect-vector-swarm', minStage: 3, maxStage: 8 },
+    { id: 'viral-hijack', minStage: 5, maxStage: 8 },
+    { id: 'nutrient-sequestration', minStage: 4, maxStage: 8 },
+    { id: 'spore-predation', minStage: 6, maxStage: 8 },
+    { id: 'thermal-stratification', minStage: 5, maxStage: 8 },
+    { id: 'ecosystem-feedback', minStage: 7, maxStage: 8 },
+  ]
 
   let activeView: ViewId = 'terminal'
   let sidebarTab: 'modules' | 'logs' = 'modules'
@@ -58,6 +79,13 @@
   let generatorHoldIntervalTimer: number | undefined
   let absorbProgress = 0
   let absorbIntervalTimer: number | undefined
+  let uiNow = Date.now()
+  let uiClockTimer: number | undefined
+  let forecastCountdownLabel: string | null = null
+  let offlineNarrative: OfflineNarrative | null = null
+  let showOfflineNarrative = false
+  let currentOfflineEventIndex = -1
+  let offlineNarrativeRun = 0
   let filteredWikiEntries = wikiEntries.filter((entry) => entry.section === selectedWikiSection)
   let visibleWikiEntry = filteredWikiEntries[0] ?? null
 
@@ -74,6 +102,57 @@
     game.reset()
     activeView = 'terminal'
     isConfirmingSporeRelease = false
+  }
+
+  function getOfflineEventIcon(type: OfflineEvent['type']): string {
+    switch (type) {
+      case 'defense':
+        return '[!]'
+      case 'milestone':
+        return '[>]'
+      case 'expansion':
+        return '[+]'
+      case 'dormant':
+        return '[~]'
+    }
+
+    return '[ ]'
+  }
+
+  function formatOfflineEventOutcome(outcome: OfflineEvent['outcome']): string {
+    switch (outcome) {
+      case 'weathered':
+        return 'WEATHERED'
+      case 'overcame':
+        return 'OVERCAME'
+      case 'breached':
+        return 'BREACHED'
+      case 'awaited':
+        return 'AWAITED'
+    }
+
+    return 'UNKNOWN'
+  }
+
+  async function playOfflineNarrativeSequence(narrative: OfflineNarrative, runId: number) {
+    currentOfflineEventIndex = -1
+
+    for (let index = 0; index < narrative.events.length; index += 1) {
+      if (runId !== offlineNarrativeRun) {
+        return
+      }
+
+      currentOfflineEventIndex = index
+      await new Promise((resolve) => window.setTimeout(resolve, 800))
+    }
+  }
+
+  function dismissOfflineNarrative() {
+    offlineNarrativeRun += 1
+    showOfflineNarrative = false
+    currentOfflineEventIndex = -1
+    offlineNarrative = null
+    _pendingOfflineNarrative.set(null)
   }
 
   function clearGeneratorBuyHold() {
@@ -174,7 +253,7 @@
   }
 
   function isNavVisible(id: ViewId): boolean {
-    if (id === 'terminal') return $game.visibility.generatorPanel
+    if (id === 'terminal') return true
     if (id === 'evolution') {
       return $game.visibility.upgradePanel || $game.visibility.strainPrompt || $game.visibility.statsPanel || $game.visibility.skillTree
     }
@@ -253,6 +332,20 @@
     (_, index) => index > 0 && !$game.visibility.generatorTiers[index]
   )
   $: useScientificNotation = $game.visibility.useScientificNotation
+  $: suppressionActive = $game.activeDefenseEvents.some((event) => event.multiplier.lt(1))
+  $: suppressionPct = (() => {
+    let combined = 1
+
+    for (const event of $game.activeDefenseEvents) {
+      if (event.multiplier.lt(1)) {
+        combined *= event.multiplier.toNumber()
+      }
+    }
+
+    return Math.round((1 - combined) * 100)
+  })()
+  $: hostProgressPercent = getHostProgress($game)
+  $: hostProgressLabel = formatHostProgress(hostProgressPercent)
   $: latestLogEntry = getLatestVisibleEvent($game.log)
   $: if (activeView !== 'wiki' && !isNavVisible(activeView)) {
     activeView = 'terminal'
@@ -337,22 +430,12 @@
     return 'Ready to integrate.'
   }
 
-  function getHostProgressLabel() {
-    const progress = getHostProgress($game)
-
-    if (progress === 0 || progress === 100) {
-      return `${progress.toFixed(0)}%`
+  function formatHostProgress(progress: number) {
+    if (progress === 100) {
+      return '100%'
     }
 
-    if (progress < 1) {
-      return `${progress.toFixed(2)}%`
-    }
-
-    if (progress < 10) {
-      return `${progress.toFixed(1)}%`
-    }
-
-    return `${progress.toFixed(0)}%`
+    return `${progress.toFixed(2)}%`
   }
 
   function filterWikiEntries(sectionId: string, query: string) {
@@ -476,14 +559,14 @@
 
   function getForecastCountdownLabel(): string | null {
     if (!$game.nextDefenseEventId) return null
-    const msUntilCheck = $game.nextDefenseCheckAt - Date.now()
+    const msUntilCheck = $game.nextDefenseCheckAt - uiNow
     if (msUntilCheck > BALANCE.DEFENSE_FORECAST_WARNING_MS) return null
     const secs = Math.max(0, Math.ceil(msUntilCheck / 1000))
     const eventLabel = getDefenseEventLabel($game.nextDefenseEventId)
     if (secs <= 0) {
       return `Incoming pattern — ${eventLabel} — imminent`
     }
-    return `Threat signal detected — ${eventLabel} — window closes ~${secs}s`
+    return `Threat signal detected — ${eventLabel} — possible trigger in ~${secs}s`
   }
 
   function getLikelyThreatForecast(): string {
@@ -491,19 +574,14 @@
       return 'NO FORECAST'
     }
 
-    if ($game.currentStage <= 2) {
-      return 'DROUGHT / BEETLE DISRUPTION / DESICCATION PULSE / UV SURGE / MICROBIAL RIVALRY'
-    }
+    return defenseThreatWindows
+      .filter((event) => $game.currentStage >= event.minStage && $game.currentStage <= event.maxStage)
+      .map((event) => getDefenseEventLabel(event.id))
+      .join(' / ')
+  }
 
-    if ($game.currentStage <= 4) {
-      return 'COLD SNAP / BEETLE DISRUPTION / ANTIFUNGAL EXUDATES / LIGNIN FORTIFICATION / INSECT VECTOR SWARM'
-    }
-
-    if ($game.currentStage <= 6) {
-      return 'SPORE COMPETITION / IMMUNE RESPONSE / VIRAL HIJACK / NUTRIENT SEQUESTRATION / THERMAL STRATIFICATION'
-    }
-
-    return 'IMMUNE RESPONSE / SPORE COMPETITION / ECOSYSTEM FEEDBACK / SPORE PREDATION / THERMAL STRATIFICATION'
+  function getRemainingDurationLabel(endsAt: number): string {
+    return formatDuration(Math.max(0, endsAt - uiNow))
   }
 
   function getEquippedCountermeasure() {
@@ -544,6 +622,27 @@
     }
 
     return 'ROOTED'
+  }
+
+  function getHostEchoDefinition(id: string): HostEchoDefinition | undefined {
+    return hostEchoDefinitions.find((entry) => entry.id === id)
+  }
+
+  function formatEchoBonus(bonus: HostEchoDefinition['bonus'] | undefined): string {
+    if (!bonus) return ''
+
+    switch (bonus.type) {
+      case 'clickMultiplier':
+        return `+${bonus.value * 100}% click output`
+      case 'passiveMultiplier':
+        return `+${bonus.value * 100}% passive output`
+      case 'defenseMitigation':
+        return `+${bonus.value * 100}% defense mitigation`
+      case 'maxSignal':
+        return `+${bonus.value} max Signal`
+      default:
+        return `+${bonus.value}`
+    }
   }
 
   function getReleaseRequirementText(): string {
@@ -590,14 +689,52 @@
   }
 
   onMount(() => {
+    const unsubscribeOfflineNarrative = _pendingOfflineNarrative.subscribe((narrative: OfflineNarrative | null) => {
+      if (!narrative || narrative.events.length === 0) {
+        return
+      }
+
+      offlineNarrative = narrative
+      showOfflineNarrative = true
+      offlineNarrativeRun += 1
+      playOfflineNarrativeSequence(narrative, offlineNarrativeRun)
+    })
+
+    if (typeof window !== 'undefined' && import.meta.env.DEV) {
+      const debugWindow = window as Window & {
+        __myceliumDebug?: {
+          simulateOffline: (minutes?: number) => void
+        }
+      }
+
+      debugWindow.__myceliumDebug = {
+        simulateOffline: (minutes = 10) => {
+          game.debugSimulateOffline(minutes)
+        },
+      }
+    }
+
     game.start()
+    uiClockTimer = window.setInterval(() => {
+      uiNow = Date.now()
+    }, 1000)
 
     return () => {
       clearGeneratorBuyHold()
       clearAbsorbProgress()
+      if (uiClockTimer) {
+        window.clearInterval(uiClockTimer)
+        uiClockTimer = undefined
+      }
+      unsubscribeOfflineNarrative()
       game.stop()
+
       game.saveNow()
     }
+  })
+
+  onDestroy(() => {
+    offlineNarrativeRun += 1
   })
 </script>
 
@@ -682,7 +819,13 @@
           <span>BIOMASS: {formatBiomass($game.biomass, useScientificNotation)} Ψ</span>
         {/if}
         {#if $game.visibility.bpsDisplay}
-          <span>BPS: +{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
+          <span>
+            BPS:
+            <span class:bps-suppressed={suppressionActive}>+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
+            {#if suppressionActive}
+              <span class="bps-suppression-tag">[SUPPRESSED -{suppressionPct}%]</span>
+            {/if}
+          </span>
         {/if}
         {#if $game.visibility.stageDisplay}
           <span>STAGE: {$game.currentStage} — {$game.stageLabel.toUpperCase()}</span>
@@ -735,7 +878,7 @@
                   <div class="analysis-alerts">
                     {#each $game.activeDefenseEvents as event}
                       <div class="analysis-alert">
-                        {event.name.toUpperCase()}: {formatDuration(event.endsAt - Date.now())}
+                        {event.name.toUpperCase()}: {getRemainingDurationLabel(event.endsAt)}
                       </div>
                     {/each}
                   </div>
@@ -745,14 +888,18 @@
                 <div class="analysis-panel__progress">
                   <div class="analysis-panel__row">
                     <span>DEGRADATION PROGRESS</span>
-                    <span>{getHostProgressLabel()}</span>
+                  </div>
+                  <div class="analysis-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={hostProgressPercent} aria-label="Degradation progress">
+                    <div class="analysis-progress-bar__fill" aria-hidden="true" style={`width: ${hostProgressPercent}%`}></div>
+                    <span class="analysis-progress-bar__label analysis-progress-bar__label--track">{hostProgressLabel}</span>
+                    <span class="analysis-progress-bar__label analysis-progress-bar__label--fill" aria-hidden="true" style={`clip-path: inset(0 ${100 - hostProgressPercent}% 0 0)`}>{hostProgressLabel}</span>
                   </div>
                 </div>
 
               <div class="analysis-panel__meta">
                 {#if $game.activeDefenseEvents.length > 0}
                   {#each $game.activeDefenseEvents as event}
-                    <p>Defense :: {event.name.toUpperCase()} / {formatDuration(event.endsAt - Date.now())}</p>
+                    <p>Defense :: {event.name.toUpperCase()} / {getRemainingDurationLabel(event.endsAt)}</p>
                   {/each}
                 {/if}
               </div>
@@ -779,8 +926,8 @@
                 variant="low"
                 className="analysis-panel"
               >
-                  {#if getForecastCountdownLabel() !== null}
-                    <p class="analysis-panel__flavor analysis-panel__flavor--alert">{getForecastCountdownLabel()}</p>
+                  {#if forecastCountdownLabel !== null}
+                    <p class="analysis-panel__flavor analysis-panel__flavor--alert">{forecastCountdownLabel}</p>
                   {/if}
                   <div class="analysis-panel__meta">
                     <p>Likely Threat :: {getLikelyThreatForecast()}</p>
@@ -823,7 +970,6 @@
           <div class:reveal-enter={isNewReveal('generatorPanel')} on:animationend={() => finishReveal('generatorPanel')}>
           <TerminalPanel
             title="GENERATOR_MODULES"
-            tag="v4.0.2"
             bleedHeader={true}
             className="modules-shell"
           >
@@ -848,7 +994,7 @@
                   <div class="module-card__footer">
                     <span>
                       {#if getGeneratorDisruption(generator.id)}
-                        OUTPUT: DISRUPTED [{formatDuration(getGeneratorDisruption(generator.id)!.endsAt - Date.now())}]
+                        OUTPUT: DISRUPTED [{getRemainingDurationLabel(getGeneratorDisruption(generator.id)!.endsAt)}]
                       {:else}
                         OUTPUT: +{formatBiomass(getGeneratorProduction($game, generator.id), useScientificNotation)} Ψ/sec
                       {/if}
@@ -857,13 +1003,6 @@
                   </div>
                   <div class="module-card__actions">
                     <span>{getModuleVersion(index)}</span>
-                    <span
-                      class:efficiency-badge={true}
-                      class:efficiency-badge--high={getGeneratorRelativeEfficiency(generator.id) > 100}
-                      class:efficiency-badge--very-high={getGeneratorRelativeEfficiency(generator.id) > 10_000}
-                    >
-                      {formatEfficiencyLabel(getGeneratorRelativeEfficiency(generator.id))}
-                    </span>
                     <button
                       class="terminal-button terminal-button--secondary"
                       class:terminal-button--disabled={!canAffordGenerator.get(generator.id)}
@@ -971,7 +1110,7 @@
               {#each $game.activeDefenseEvents as event}
                 <div class="mobile-defense-strip__event">
                   <strong>{event.name.toUpperCase()}</strong>
-                  <span>{formatDuration(event.endsAt - Date.now())}</span>
+                  <span>{getRemainingDurationLabel(event.endsAt)}</span>
                 </div>
               {/each}
             </div>
@@ -997,8 +1136,12 @@
           </div>
 
           <div class="mobile-analysis__progress-row">
-            <span></span>
-            <span>{getHostProgressLabel()}</span>
+            <span>DEGRADATION PROGRESS</span>
+          </div>
+          <div class="analysis-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={hostProgressPercent} aria-label="Degradation progress">
+            <div class="analysis-progress-bar__fill" aria-hidden="true" style={`width: ${hostProgressPercent}%`}></div>
+            <span class="analysis-progress-bar__label analysis-progress-bar__label--track">{hostProgressLabel}</span>
+            <span class="analysis-progress-bar__label analysis-progress-bar__label--fill" aria-hidden="true" style={`clip-path: inset(0 ${100 - hostProgressPercent}% 0 0)`}>{hostProgressLabel}</span>
           </div>
 
           <div class="mobile-alert-card">
@@ -1007,7 +1150,7 @@
               {#if $game.activeDefenseEvents.length > 0}
                 {#each $game.activeDefenseEvents as event, index}
                   <p>HOST DEFENSE {index + 1}</p>
-                  <strong>{event.name.toUpperCase()} [{formatDuration(event.endsAt - Date.now())}]</strong>
+                  <strong>{event.name.toUpperCase()} [{getRemainingDurationLabel(event.endsAt)}]</strong>
                 {/each}
               {:else}
                 <p>HOST DEFENSES</p>
@@ -1033,8 +1176,8 @@
 
         {#if $game.currentStage >= BALANCE.DEFENSE_FORECAST_UNLOCK_STAGE}
         <TerminalPanel title="DEFENSE CONTROL" tag="▲" variant="low" bleedHeader={true} className="mobile-card">
-            {#if getForecastCountdownLabel() !== null}
-              <p class="mobile-analysis__flavor mobile-analysis__flavor--alert">{getForecastCountdownLabel()}</p>
+            {#if forecastCountdownLabel !== null}
+              <p class="mobile-analysis__flavor mobile-analysis__flavor--alert">{forecastCountdownLabel}</p>
             {/if}
             <p class="mobile-analysis__flavor">Likely Threat :: {getLikelyThreatForecast()}</p>
             <p class="mobile-analysis__flavor">Countermeasure :: {getEquippedCountermeasure()?.name.toUpperCase() ?? 'UNASSIGNED'}</p>
@@ -1086,17 +1229,10 @@
                   <p>{generator.flavor.toUpperCase()}</p>
                   <p class="mobile-generator-row__meta">
                     {#if getGeneratorDisruption(generator.id)}
-                      OUTPUT: DISRUPTED [{formatDuration(getGeneratorDisruption(generator.id)!.endsAt - Date.now())}]
+                      OUTPUT: DISRUPTED [{getRemainingDurationLabel(getGeneratorDisruption(generator.id)!.endsAt)}]
                     {:else}
                       OUTPUT: +{formatBiomass(getGeneratorProduction($game, generator.id), useScientificNotation)} Ψ/SEC
                     {/if}
-                  </p>
-                  <p
-                    class:efficiency-badge={true}
-                    class:efficiency-badge--high={getGeneratorRelativeEfficiency(generator.id) > 100}
-                    class:efficiency-badge--very-high={getGeneratorRelativeEfficiency(generator.id) > 10_000}
-                  >
-                    {formatEfficiencyLabel(getGeneratorRelativeEfficiency(generator.id))}
                   </p>
                 </div>
                 <button class="mobile-generator-row__buy" disabled={!canAffordGenerator.get(generator.id)} type="button"
@@ -1270,6 +1406,29 @@
               {/if}
             </div>
 
+            {#if $game.visibility.statsPanel}
+            <TerminalPanel title="EVOLUTIONARY ECHOES" tag="ECHO" variant="low" bleedHeader={true} resizable={true} resizeAxis="vertical">
+              <div class="preview-copy">
+                <p class="echo-subtitle">Each host leaves a permanent mark on your strain.</p>
+                {#if Object.keys($game.hostEchoes).length === 0}
+                  <p class="echo-empty">Clear your first host to begin accumulating evolutionary memory.</p>
+                {:else}
+                  <div class="echo-grid">
+                    {#each Object.entries($game.hostEchoes) as [stageNum, echoType]}
+                      {@const echoDef = getHostEchoDefinition(echoType)}
+                      {@const hostDef = hostDefinitions[Number(stageNum) - 1]}
+                      <div class:overview-stat={true} class:echo-card={true} class:echo-card--aggressive={echoType === 'aggressive'} class:echo-card--efficient={echoType === 'efficient'} class:echo-card--resilient={echoType === 'resilient'} class:echo-card--patient={echoType === 'patient'}>
+                        <span class="overview-stat__label">{hostDef?.name || `Stage ${stageNum}`}</span>
+                        <strong>{echoDef?.name}</strong>
+                        <span class="echo-card__bonus">{formatEchoBonus(echoDef?.bonus)}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            </TerminalPanel>
+            {/if}
+
             {#if $game.visibility.skillTree}
             <TerminalPanel title="NEURAL MUTATIONS" tag="SKILL TREE" variant="low" bleedHeader={true} resizable={true} resizeAxis="vertical">
               <div class="desktop-skill-columns">
@@ -1408,6 +1567,29 @@
               </div>
             {/if}
 
+          </div>
+        </TerminalPanel>
+        {/if}
+
+        {#if $game.visibility.statsPanel}
+        <TerminalPanel title="EVOLUTIONARY ECHOES" tag="ECHO" variant="low" className="mobile-card" bleedHeader={true}>
+          <div class="mobile-evolution__echoes">
+            <p class="echo-subtitle">Each host leaves a permanent mark on your strain.</p>
+            {#if Object.keys($game.hostEchoes).length === 0}
+              <p class="echo-empty">Clear your first host to begin accumulating evolutionary memory.</p>
+            {:else}
+              <div class="echo-grid echo-grid--mobile">
+                {#each Object.entries($game.hostEchoes) as [stageNum, echoType]}
+                  {@const echoDef = getHostEchoDefinition(echoType)}
+                  {@const hostDef = hostDefinitions[Number(stageNum) - 1]}
+                  <div class:echo-card={true} class:echo-card--aggressive={echoType === 'aggressive'} class:echo-card--efficient={echoType === 'efficient'} class:echo-card--resilient={echoType === 'resilient'} class:echo-card--patient={echoType === 'patient'}>
+                    <span class="overview-stat__label">{hostDef?.name || `Stage ${stageNum}`}</span>
+                    <strong>{echoDef?.name}</strong>
+                    <span class="echo-card__bonus">{formatEchoBonus(echoDef?.bonus)}</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         </TerminalPanel>
         {/if}
@@ -1720,6 +1902,44 @@ MYCELIUM_ROOT_v1`}</pre>
     </div>
   {/if}
 
+  {#if showOfflineNarrative && offlineNarrative}
+    <div class="offline-narrative-overlay" transition:fade>
+      <button class="offline-narrative-backdrop" type="button" aria-label="Dismiss offline recap" on:click={dismissOfflineNarrative}></button>
+      <div class="offline-narrative-panel" role="dialog" aria-modal="true" aria-labelledby="offline-narrative-title" transition:fly={{ y: 20, duration: 250 }}>
+        <p class="offline-narrative-panel__eyebrow">OFFLINE RECAP</p>
+        <h2 id="offline-narrative-title">THE NETWORK GREW</h2>
+        <p class="offline-narrative-panel__summary">{offlineNarrative.summary}</p>
+
+        <div class="offline-narrative-timeline">
+          {#each offlineNarrative.events as event, index}
+            <div class:offline-narrative-event={true} class:offline-narrative-event--visible={index <= currentOfflineEventIndex}>
+              <span class="offline-narrative-event__icon">{getOfflineEventIcon(event.type)}</span>
+              <div class="offline-narrative-event__body">
+                <div class="offline-narrative-event__header">
+                  <strong>{event.name}</strong>
+                  <span>{formatOfflineEventOutcome(event.outcome)}</span>
+                </div>
+
+                {#if event.biomassDelta}
+                  <span class="offline-narrative-event__gain">+{formatDecimal(event.biomassDelta)} biomass</span>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+
+        <div class="offline-narrative-total">
+          <span class="offline-narrative-total__value">+{formatDecimal(offlineNarrative.gains)}</span>
+          <span class="offline-narrative-total__label">biomass accumulated</span>
+        </div>
+
+        <div class="offline-narrative-panel__actions">
+          <TerminalButton on:click={dismissOfflineNarrative}>[ RESUME INFILTRATION ]</TerminalButton>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   {#if activeView === 'wiki'}
     <div class="mobile-wiki-overlay">
       <div class="mobile-wiki-sheet">
@@ -1769,3 +1989,5 @@ MYCELIUM_ROOT_v1`}</pre>
   {/if}
 </div>
 {/if}
+
+<DefenseToast state={$game} />

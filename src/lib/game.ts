@@ -49,6 +49,17 @@ export type DefenseEventId =
   | 'thermal-stratification'
   | 'ecosystem-feedback'
 export type CountermeasureId = 'moisture-buffer' | 'brood-decoy' | 'immune-mimicry'
+export type HostEchoType = 'aggressive' | 'efficient' | 'resilient' | 'patient'
+
+export interface HostEchoDefinition {
+  id: HostEchoType
+  name: string
+  description: string
+  bonus: {
+    type: 'clickMultiplier' | 'passiveMultiplier' | 'defenseMitigation' | 'maxSignal'
+    value: number
+  }
+}
 
 export interface GeneratorDefinition {
   id: GeneratorId
@@ -108,6 +119,20 @@ export interface ActiveDefenseEvent {
   multiplier: Decimal
   clickMultiplier?: Decimal
   disabledGeneratorId?: GeneratorId
+}
+
+export interface OfflineEvent {
+  type: 'defense' | 'milestone' | 'expansion' | 'dormant'
+  name: string
+  durationMs: number
+  outcome: 'weathered' | 'overcame' | 'breached' | 'awaited'
+  biomassDelta?: Decimal
+}
+
+export interface OfflineNarrative {
+  gains: Decimal
+  events: OfflineEvent[]
+  summary: string
 }
 
 export interface CountermeasureDefinition {
@@ -196,6 +221,12 @@ export interface GameState {
   lastTickTime: number
   log: string[]
   visibility: VisibilityState
+  hostEchoes: Record<number, HostEchoType>
+  _currentHostClickDamage: Decimal
+  _currentHostPassiveDamage: Decimal
+  _currentHostDefenseEventsSurvived: number
+  _offlineEvents: OfflineEvent[]
+  _pendingOfflineEvents: OfflineEvent[]
 }
 
 // ============================================================================
@@ -564,6 +595,33 @@ export const hostDefinitions: HostDefinition[] = [
     threatLevel: 'extreme',
     defenseSignature: 'Total ecological backlash. Every system resists at once.',
     transitionSignal: 'No higher host remains. Collapse here feeds the release loop.',
+  },
+]
+
+export const hostEchoDefinitions: HostEchoDefinition[] = [
+  {
+    id: 'aggressive',
+    name: 'Predatory Instinct',
+    description: 'You tore through the host in a frenzy of consumption.',
+    bonus: { type: 'clickMultiplier', value: BALANCE.HOST_ECHO_BONUS_AGGRESSIVE },
+  },
+  {
+    id: 'efficient',
+    name: 'Optimized Metabolism',
+    description: 'You balanced active assault with passive growth.',
+    bonus: { type: 'passiveMultiplier', value: BALANCE.HOST_ECHO_BONUS_EFFICIENT },
+  },
+  {
+    id: 'resilient',
+    name: 'Stress Hardening',
+    description: 'You thrived despite active defense events.',
+    bonus: { type: 'defenseMitigation', value: BALANCE.HOST_ECHO_BONUS_RESILIENT },
+  },
+  {
+    id: 'patient',
+    name: 'Dormant Potential',
+    description: 'You allowed the mycelium to grow undisturbed.',
+    bonus: { type: 'maxSignal', value: BALANCE.HOST_ECHO_BONUS_PATIENT },
   },
 ]
 

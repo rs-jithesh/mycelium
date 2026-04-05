@@ -139,6 +139,12 @@ export function getDefenseMitigation(state: GameState): number {
     mitigation += BALANCE.SPORE_HARDENING_MITIGATION_BONUS
   }
 
+  const echoBonuses = Object.values(state.hostEchoes)
+  const resilientCount = echoBonuses.filter((e) => e === 'resilient').length
+  if (resilientCount > 0) {
+    mitigation += resilientCount * BALANCE.HOST_ECHO_BONUS_RESILIENT
+  }
+
   return Math.min(BALANCE.DEFENSE_MITIGATION_CAP, mitigation)
 }
 
@@ -324,6 +330,12 @@ export function getProductionMultiplier(state: GameState, generatorId: Generator
     multiplier = multiplier.mul(signalBonus)
   }
 
+  const echoBonuses = Object.values(state.hostEchoes)
+  const efficientCount = echoBonuses.filter((e) => e === 'efficient').length
+  if (efficientCount > 0) {
+    multiplier = multiplier.mul(1 + efficientCount * BALANCE.HOST_ECHO_BONUS_EFFICIENT)
+  }
+
   return multiplier
 }
 
@@ -333,6 +345,12 @@ export function getSignalCap(state: GameState): number {
   const base = BALANCE.SIGNAL.BASE_CAP
   const complexityBonus = state.stats.complexity * BALANCE.SIGNAL.COMPLEXITY_CAP_BONUS_PER_POINT
   let cap = base + complexityBonus
+
+  const echoBonuses = Object.values(state.hostEchoes)
+  const patientCount = echoBonuses.filter((e) => e === 'patient').length
+  if (patientCount > 0) {
+    cap += patientCount * BALANCE.HOST_ECHO_BONUS_PATIENT
+  }
 
   if (state.strain === 'parasite') {
     cap *= BALANCE.SIGNAL.STRAIN_PARASITE_CAP_PENALTY
@@ -500,7 +518,17 @@ export function getBaseClickValue(state: GameState): Decimal {
   // passive wait. Recovering the pre-penalty BPS keeps the base stable.
   const referenceBps = getUnpenalizedBps(state)
   const bpsScaled = referenceBps.mul(bpsFraction)
-  let value = Decimal.max(new Decimal(1), bpsScaled)
+
+  // Stage-relative click floor: a fraction of current host health.
+  // Ensures clicking remains meaningful at every stage, independent of BPS.
+  const hostHealthFractions = state.strain === 'parasite'
+    ? BALANCE.CLICK_HOST_HEALTH_FRACTION_PARASITE
+    : BALANCE.CLICK_HOST_HEALTH_FRACTION_DEFAULT
+  const stageIndex = Math.min(state.currentStage - 1, hostHealthFractions.length - 1)
+  const hostHealthFloor = state.hostHealth.mul(hostHealthFractions[stageIndex])
+
+  // Take the higher of BPS-scaled or host-health floor.
+  let value = Decimal.max(new Decimal(1), Decimal.max(bpsScaled, hostHealthFloor))
 
   // If a defense event is active, apply an additional click boost.
   // This makes clicking actively stronger during events, creating a
@@ -542,6 +570,12 @@ export function getBaseClickValue(state: GameState): Decimal {
 
   if (hasSkillInState(state, 'hemorrhagic-spread')) {
     value = value.mul(BALANCE.HEMORRHAGIC_SPREAD_CLICK_BONUS)
+  }
+
+  const echoBonuses = Object.values(state.hostEchoes)
+  const aggressiveCount = echoBonuses.filter((e) => e === 'aggressive').length
+  if (aggressiveCount > 0) {
+    value = value.mul(1 + aggressiveCount * BALANCE.HOST_ECHO_BONUS_AGGRESSIVE)
   }
 
   value = value.mul(getClickDefenseMultiplier(state))

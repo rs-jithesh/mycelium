@@ -261,6 +261,18 @@ export const BALANCE = {
     'distributed-cognition': 1.2e14,
   } as Record<import('../lib/game').SkillId, number>,
 
+  // Per-stage click value as fraction of current host health.
+  // Ensures clicking remains meaningful at every stage, independent of BPS.
+  // Parasite gets 1.5x (same ratio as CLICK_BPS_FRACTION_PARASITE vs DEFAULT).
+  CLICK_HOST_HEALTH_FRACTION_DEFAULT: [
+    0.001,   0.0005,  0.0003,  0.0002,
+    0.00015, 0.0001,  0.00008, 0.00005,
+  ],
+  CLICK_HOST_HEALTH_FRACTION_PARASITE: [
+    0.0015,  0.00075, 0.00045, 0.0003,
+    0.000225, 0.00015, 0.00012, 0.000075,
+  ],
+
   // BPS fraction used as base click value, differentiated by strain.
   // Parasite is the active-play strain and gets a higher fraction.
   // Symbiote and Saprophyte use the lower default.
@@ -282,6 +294,16 @@ export const BALANCE = {
   // Makes clicking the correct mechanical response to a defense event
   // rather than a passive wait.
   CLICK_DEFENSE_EVENT_BOOST: 1.5,
+
+  // Host Echoes — permanent bonuses earned based on how each host was cleared.
+  HOST_ECHO_AGGRESSIVE_CLICK_THRESHOLD: 0.6,
+  HOST_ECHO_PATIENT_CLICK_THRESHOLD: 0.15,
+  HOST_ECHO_RESILIENT_DEFENSE_THRESHOLD: 3,
+
+  HOST_ECHO_BONUS_AGGRESSIVE: 0.05,
+  HOST_ECHO_BONUS_EFFICIENT: 0.03,
+  HOST_ECHO_BONUS_RESILIENT: 0.05,
+  HOST_ECHO_BONUS_PATIENT: 0.5,
 
   // Notation thresholds
   NOTATION_LOCALE_MAX: 1_000,

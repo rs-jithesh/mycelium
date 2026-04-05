@@ -16,6 +16,7 @@ import type {
   ActiveDefenseEvent,
   GameState,
   VisibilityState,
+  HostEchoType,
 } from '../lib/game'
 
 function createDefaultVisibilityState(): VisibilityState {
@@ -117,6 +118,12 @@ export function createDefaultState(): GameState {
     lastTickTime: now,
     log: [],
     visibility: createDefaultVisibilityState(),
+    hostEchoes: {},
+    _currentHostClickDamage: new Decimal(0),
+    _currentHostPassiveDamage: new Decimal(0),
+    _currentHostDefenseEventsSurvived: 0,
+    _offlineEvents: [],
+    _pendingOfflineEvents: [],
   }
 }
 

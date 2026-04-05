@@ -5,7 +5,7 @@
  */
 
 import { writable } from 'svelte/store'
-import type { BuyAmount, CountermeasureId, GeneratorId, UpgradeId, StatId, StrainId, SkillId } from '../lib/game'
+import type { BuyAmount, CountermeasureId, GeneratorId, OfflineNarrative, UpgradeId, StatId, StrainId, SkillId } from '../lib/game'
 import {
   tick as engineTick,
   absorb as engineAbsorb,
@@ -21,7 +21,7 @@ import {
   toggleLogPanelAction,
   handleVisibilityChange,
   acknowledgeRevealAction,
-  loadState,
+  loadStateWithNarrative,
   saveState,
   maybeAppendMilestoneLog,
   createFreshState,
@@ -34,10 +34,15 @@ import {
 import type { GameState } from '../lib/game'
 import { BALANCE } from '../engine/balance.config'
 
+export const _pendingOfflineNarrative = writable<OfflineNarrative | null>(null)
+
 export function createGameStore() {
-  const state = writable<GameState>(loadState())
+  const loaded = loadStateWithNarrative()
+  const state = writable<GameState>(loaded.state)
   let tickTimer: number | undefined
   let saveTimer: number | undefined
+
+  _pendingOfflineNarrative.set(loaded.narrative)
 
   function updateState(updater: (current: GameState) => GameState) {
     state.update((current) => {
@@ -146,6 +151,33 @@ export function createGameStore() {
     }
   }
 
+  function getSnapshot(): GameState | null {
+    let snapshot: GameState | null = null
+    const unsubscribe = state.subscribe((value) => {
+      snapshot = value
+    })
+    unsubscribe()
+    return snapshot
+  }
+
+  function debugSimulateOffline(minutes = 10) {
+    if (!import.meta.env.DEV) return
+
+    const snapshot = getSnapshot()
+    if (!snapshot) return
+
+    const simulated = {
+      ...snapshot,
+      lastSaveTime: Date.now() - Math.max(1, minutes) * 60 * 1000,
+    }
+
+    saveState(simulated)
+    const loadedSimulation = loadStateWithNarrative()
+    state.set(loadedSimulation.state)
+    _pendingOfflineNarrative.set(loadedSimulation.narrative)
+    saveState(loadedSimulation.state)
+  }
+
   function handleVisibilityChangeAction() {
     if (typeof document === 'undefined') return
 
@@ -211,6 +243,7 @@ export function createGameStore() {
     // networkIsolation,
     reset,
     saveNow,
+    debugSimulateOffline,
     setBuyAmount,
     toggleLogPanel,
     start,

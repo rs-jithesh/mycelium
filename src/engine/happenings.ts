@@ -7,7 +7,18 @@
 import Decimal from 'break_eternity.js'
 import { BALANCE } from './balance.config'
 import * as formulas from './formulas'
-import type { CountermeasureId, DefenseEventId, GameState, GeneratorId, UpgradeId, StatId, StrainId } from '../lib/game'
+import type {
+  CountermeasureId,
+  DefenseEventId,
+  GameState,
+  GeneratorId,
+  HostEchoType,
+  OfflineEvent,
+  OfflineNarrative,
+  StatId,
+  StrainId,
+  UpgradeId,
+} from '../lib/game'
 import { createDefaultState } from './values'
 import {
   generatorDefinitions,
@@ -15,6 +26,7 @@ import {
   hostDefinitions,
   strainDefinitions,
   skillDefinitions,
+  hostEchoDefinitions,
   getCurrentHostDefinition,
   hasNextStage as hasNextStageUtil,
 } from '../lib/game'
@@ -36,6 +48,21 @@ function appendLog(log: string[], message: string): string[] {
 function appendLogs(log: string[], messages: string[]): string[] {
   if (messages.length === 0) return log
   return clampLog([...log, ...messages.map(createLogEntry)])
+}
+
+function formatEchoBonus(bonus: { type: string; value: number }): string {
+  switch (bonus.type) {
+    case 'clickMultiplier':
+      return `+${bonus.value * 100}% click output`
+    case 'passiveMultiplier':
+      return `+${bonus.value * 100}% passive output`
+    case 'defenseMitigation':
+      return `+${bonus.value * 100}% defense mitigation`
+    case 'maxSignal':
+      return `+${bonus.value} max Signal`
+    default:
+      return `+${bonus.value}`
+  }
 }
 
 function markReveal(state: GameState, key: string): GameState {
@@ -98,6 +125,10 @@ function unlockGeneratorTier(state: GameState, tierIndex: number): GameState {
 
 function getGeneratorNameByIndex(index: number): string {
   return generatorDefinitions[index]?.name ?? `Tier ${index + 1}`
+}
+
+function getGeneratorNameById(generatorId: string): string {
+  return generatorDefinitions.find((generator) => generator.id === generatorId)?.name ?? generatorId
 }
 
 type DefenseFlavorDefinition = {
@@ -414,6 +445,10 @@ function getDefenseEventDurationMs(eventId: DefenseEventId): number {
   return defenseFlavorDefinitions[eventId].durationMs
 }
 
+function getDefenseEventName(eventId: DefenseEventId): string {
+  return defenseFlavorDefinitions[eventId].name
+}
+
 function rollDefenseEventId(state: GameState): DefenseEventId {
   const eligibleEvents = Object.values(defenseFlavorDefinitions).filter(
     (event) => state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max
@@ -444,15 +479,19 @@ function padGeneratorTiers(tiers: boolean[]): boolean[] {
   return [...tiers, ...new Array(expected - tiers.length).fill(false)]
 }
 
-function gainBiomass(state: GameState, amount: Decimal): GameState {
+function gainBiomass(state: GameState, amount: Decimal, source: 'click' | 'passive'): GameState {
   if (amount.lte(0)) return state
 
   // Signal economy temporarily disabled.
   const hostDamage = amount
   const remainingHost = Decimal.max(0, state.hostHealth.sub(hostDamage))
+  const trackingUpdate = source === 'click'
+    ? { _currentHostClickDamage: state._currentHostClickDamage.add(amount) }
+    : { _currentHostPassiveDamage: state._currentHostPassiveDamage.add(amount) }
 
   return recalculateDerivedState({
     ...state,
+    ...trackingUpdate,
     biomass: state.biomass.add(amount),
     lifetimeBiomass: state.lifetimeBiomass.add(amount),
     hostHealth: remainingHost,
@@ -645,7 +684,7 @@ function createDefenseEvent(state: GameState, now: number, eventId: DefenseEvent
   }
 }
 
-function applyCountermeasureToEvent(state: GameState, event: NonNullable<ReturnType<typeof createDefenseEvent>>) {
+function applyCountermeasureToEvent(state: GameState, event: NonNullable<ReturnType<typeof createDefenseEvent>>, now: number) {
   if (state.equippedCountermeasure !== 'brood-decoy' || event.id !== 'beetle-disruption') {
     return event
   }
@@ -653,6 +692,7 @@ function applyCountermeasureToEvent(state: GameState, event: NonNullable<ReturnT
   return {
     ...event,
     description: 'Predator pressure redirected into decoy tissue. All output reduced slightly for 30s.',
+    endsAt: now + 30_000,
     disabledGeneratorId: undefined,
     multiplier: new Decimal(BALANCE.COUNTERMEASURE_BROOD_DECOY_FALLBACK_MULTIPLIER),
   }
@@ -666,9 +706,16 @@ function getDefenseEventLogLines(event: { id: string; disabledGeneratorId?: stri
   }
 
   if (defenseId === 'beetle-disruption') {
+    if (!event.disabledGeneratorId) {
+      return [
+        ...definition.triggerLogs.map(createLogEntry),
+        createLogEntry('Brood Decoy absorbed the impact. Colony output dips briefly instead of a full sever.'),
+      ]
+    }
+
     return [
       ...definition.triggerLogs.map(createLogEntry),
-      createLogEntry(`${event.disabledGeneratorId ? event.disabledGeneratorId : 'A generator'} output has dropped to zero for 3 minutes.`),
+      createLogEntry(`${getGeneratorNameById(event.disabledGeneratorId)} output has dropped to zero for 3 minutes.`),
     ]
   }
 
@@ -903,7 +950,8 @@ export function tick(state: GameState, now = Date.now()): GameState {
       ...next,
       lastTickTime: now,
     },
-    perTick
+    perTick,
+    'passive'
   )
 
   next = tickSignalSystem(next, deltaMs)
@@ -1193,7 +1241,8 @@ export function absorb(state: GameState): GameState {
       ...state,
       clickCount,
     },
-    state.biomassPerClick
+    state.biomassPerClick,
+    'click'
   )
 
   if (state.strain === 'parasite' && clickCount % BALANCE.PARASITE_BURST_CLICK_THRESHOLD === 0) {
@@ -1201,7 +1250,7 @@ export function absorb(state: GameState): GameState {
       ? BALANCE.PARASITE_BURST_MULTIPLIER_WITH_SKILL
       : BALANCE.PARASITE_BURST_MULTIPLIER
     const burstGain = next.biomassPerSecond.mul(burstMultiplier)
-    next = gainBiomass(next, burstGain)
+    next = gainBiomass(next, burstGain, 'passive')
     next = {
       ...next,
       log: clampLog([
@@ -1372,11 +1421,32 @@ export function chooseStrainAction(state: GameState, strainId: StrainId): GameSt
 export function advanceStageAction(state: GameState): GameState {
   if (!state.hostCompleted || !hasNextStageUtil(state)) return state
 
+  const totalDamage = state._currentHostClickDamage.add(state._currentHostPassiveDamage)
+  const clickRatio = totalDamage.gt(0)
+    ? state._currentHostClickDamage.div(totalDamage).toNumber()
+    : 0
+
+  let echoType: HostEchoType
+  if (state._currentHostDefenseEventsSurvived >= BALANCE.HOST_ECHO_RESILIENT_DEFENSE_THRESHOLD) {
+    echoType = 'resilient'
+  } else if (clickRatio > BALANCE.HOST_ECHO_AGGRESSIVE_CLICK_THRESHOLD) {
+    echoType = 'aggressive'
+  } else if (clickRatio < BALANCE.HOST_ECHO_PATIENT_CLICK_THRESHOLD) {
+    echoType = 'patient'
+  } else {
+    echoType = 'efficient'
+  }
+
+  const echoDef = hostEchoDefinitions.find((entry) => entry.id === echoType)!
   const nextStage = state.currentStage + 1
   const nextHost = hostDefinitions.find((h) => h.stage === nextStage)!
 
   return checkVisibilityUnlocks(recalculateDerivedState({
     ...state,
+    hostEchoes: {
+      ...state.hostEchoes,
+      [state.currentStage]: echoType,
+    },
     currentStage: nextStage,
     highestStageReached: Math.max(state.highestStageReached, nextStage),
     hostName: nextHost.name,
@@ -1388,9 +1458,14 @@ export function advanceStageAction(state: GameState): GameState {
     activeDefenseEvents: [],
     nextDefenseEventId: null,
     activeParasiteDefenseBurstMs: 0,
+    _currentHostClickDamage: new Decimal(0),
+    _currentHostPassiveDamage: new Decimal(0),
+    _currentHostDefenseEventsSurvived: 0,
     nextDefenseCheckAt: Date.now() + BALANCE.DEFENSE_EVENT_COOLDOWN_MS,
     log: clampLog([
       ...state.log,
+      createLogEntry(`Host cleared. ${echoDef.name} absorbed: ${echoDef.description}`),
+      createLogEntry(`Permanent bonus: ${formatEchoBonus(echoDef.bonus)}`),
       createLogEntry(`Stage ${nextStage} initiated. New host identified: ${nextHost.name}.`),
       createLogEntry(`[${nextHost.stageLabel.toUpperCase()}] ${nextHost.subtitle}`),
       createLogEntry(nextHost.flavor),
@@ -1412,6 +1487,7 @@ export function releaseSporesAction(state: GameState): GameState {
     ...recalculateDerivedState({
       ...freshState,
       geneticMemory: totalMemory,
+      hostEchoes: state.hostEchoes,
       prestigeCount: state.prestigeCount + 1,
       hasPrestiged: true,
       highestStageReached: Math.max(state.highestStageReached, hostDefinitions.length),
@@ -1554,7 +1630,16 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
   }
 
   const eventId = state.nextDefenseEventId ?? rollDefenseEventId(state)
-  const event = createDefenseEvent(state, now, eventId)
+  const eligibleEventIds = Object.values(defenseFlavorDefinitions)
+    .filter((event) => state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max)
+    .map((event) => event.id)
+  const availableEventIds = eligibleEventIds.filter(
+    (id) => !state.activeDefenseEvents.some((existing) => existing.id === id)
+  )
+  const selectedEventId = availableEventIds.includes(eventId)
+    ? eventId
+    : (availableEventIds.length > 0 ? getRandomItem(availableEventIds) : eventId)
+  const event = createDefenseEvent(state, now, selectedEventId)
   if (!event) {
     return {
       ...state,
@@ -1571,7 +1656,7 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
     }
   }
 
-  const mitigatedEvent = applyCountermeasureToEvent(state, event)
+  const mitigatedEvent = applyCountermeasureToEvent(state, event, now)
   const nextForecast = rollDefenseEventId(state)
   const parasiteBurstMs = state.strain === 'parasite'
     ? BALANCE.STRAIN_PARASITE_DEFENSE_BURST_MS
@@ -1580,6 +1665,15 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
   return recalculateDerivedState({
     ...state,
     activeDefenseEvents: [...state.activeDefenseEvents, mitigatedEvent],
+    _pendingOfflineEvents: [
+      ...state._pendingOfflineEvents,
+      {
+        type: 'defense',
+        name: mitigatedEvent.name,
+        durationMs: mitigatedEvent.endsAt - now,
+        outcome: 'weathered',
+      },
+    ],
     nextDefenseEventId: nextForecast,
     activeParasiteDefenseBurstMs: parasiteBurstMs,
     nextDefenseCheckAt: nextCheckAt,
@@ -1601,41 +1695,179 @@ export function saveState(state: GameState): void {
   window.localStorage.setItem(BALANCE.STORAGE_KEY, JSON.stringify(serialize(state)))
 }
 
-export function loadState(): GameState {
-  if (typeof window === 'undefined') return createFreshState()
+function getOfflineNarrativeDurationMs(state: GameState, now = Date.now()): number {
+  return Math.min(
+    Math.max(0, now - state.lastSaveTime),
+    BALANCE.OFFLINE_CAP_MS
+  )
+}
+
+function getOfflineMilestoneEvent(state: GameState, gains: Decimal, elapsedMs: number): OfflineEvent | null {
+  if (gains.lte(0) || state.hostCompleted || state.hostHealth.gt(gains)) {
+    return null
+  }
+
+  return {
+    type: 'milestone',
+    name: `Breached ${state.hostName}`,
+    durationMs: elapsedMs,
+    outcome: 'breached',
+    biomassDelta: Decimal.min(gains, state.hostHealth),
+  }
+}
+
+function calculateOfflineNarrative(state: GameState, offlineMs: number, gains: Decimal): OfflineNarrative {
+  const narrativeMs = Math.min(offlineMs, BALANCE.OFFLINE_CAP_MS)
+  const events: OfflineEvent[] = []
+
+  for (const event of state._pendingOfflineEvents) {
+    events.push({
+      ...event,
+      outcome: event.durationMs <= narrativeMs ? 'weathered' : 'awaited',
+    })
+  }
+
+  const milestoneEvent = getOfflineMilestoneEvent(state, gains, narrativeMs)
+  if (milestoneEvent) {
+    events.push(milestoneEvent)
+  }
+
+  if (gains.gt(0)) {
+    events.push({
+      type: events.length > 0 ? 'expansion' : 'dormant',
+      name: events.length > 0 ? 'Network Expansion' : 'Dormant Spread',
+      durationMs: narrativeMs,
+      outcome: events.length > 0 ? 'breached' : 'awaited',
+      biomassDelta: gains,
+    })
+  } else {
+    events.push({
+      type: 'dormant',
+      name: 'Dormant Metabolism',
+      durationMs: narrativeMs,
+      outcome: 'awaited',
+    })
+  }
+
+  return {
+    gains,
+    events,
+    summary: generateNarrativeSummary(events, offlineMs),
+  }
+}
+
+function formatOfflineDuration(totalMs: number): string {
+  const totalMinutes = Math.max(0, Math.floor(totalMs / (60 * 1000)))
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+
+  if (hours > 0 && minutes > 0) {
+    return `${hours} hour${hours === 1 ? '' : 's'} and ${minutes} minute${minutes === 1 ? '' : 's'}`
+  }
+
+  if (hours > 0) {
+    return `${hours} hour${hours === 1 ? '' : 's'}`
+  }
+
+  if (minutes > 0) {
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`
+  }
+
+  return 'moments'
+}
+
+function generateNarrativeSummary(events: OfflineEvent[], totalMs: number): string {
+  const defenseCount = events.filter((event) => event.type === 'defense').length
+  const milestoneEvent = events.find((event) => event.type === 'milestone')
+  const expansionEvent = events.find((event) => event.type === 'expansion' || event.type === 'dormant')
+
+  let summary = `While you were gone for ${formatOfflineDuration(totalMs)}, the mycelium `
+
+  if (defenseCount === 0 && milestoneEvent) {
+    summary += `${milestoneEvent.name.toLowerCase()} and pushed deeper into the host.`
+    return summary
+  }
+
+  if (defenseCount === 0 && expansionEvent?.type === 'dormant') {
+    summary += 'held its dormant lattice together, waiting for your return.'
+    return summary
+  }
+
+  if (defenseCount === 0) {
+    summary += 'spread undisturbed through the substrate.'
+    return summary
+  }
+
+  if (defenseCount === 1) {
+    summary += `weathered ${events.find((event) => event.type === 'defense')?.name.toLowerCase() ?? 'a lone threat'}`
+  } else {
+    summary += `endured ${defenseCount} defense surges`
+  }
+
+  if (milestoneEvent) {
+    summary += ` and ${milestoneEvent.name.toLowerCase()}.`
+  } else {
+    summary += ', continuing its expansion.'
+  }
+
+  return summary
+}
+
+export function loadStateWithNarrative(): { state: GameState; narrative: OfflineNarrative | null } {
+  if (typeof window === 'undefined') {
+    return { state: createFreshState(), narrative: null }
+  }
 
   const raw = window.localStorage.getItem(BALANCE.STORAGE_KEY)
-  if (!raw) return createFreshState()
+  if (!raw) {
+    return { state: createFreshState(), narrative: null }
+  }
 
   try {
     const parsed = JSON.parse(raw) as Partial<SerializedState>
     const hydrated = normalizeLoadedState(parsed)
-    const offlineGain = formulas.calculateOfflineGains(hydrated)
     const now = Date.now()
-    const withOffline = gainBiomass(hydrated, offlineGain)
+    const offlineMs = getOfflineNarrativeDurationMs(hydrated, now)
+    const offlineGain = formulas.calculateOfflineGains(hydrated, now)
+    const withOffline = gainBiomass(hydrated, offlineGain, 'passive')
+    const narrative = offlineMs >= 5 * 60 * 1000
+      ? calculateOfflineNarrative(hydrated, offlineMs, offlineGain)
+      : null
 
-    return recalculateDerivedState({
-      ...withOffline,
-      lastSaveTime: now,
-      lastTickTime: now,
-      log: offlineGain.gt(0)
-        ? clampLog([
-            ...withOffline.log,
-            createLogEntry(`Dormant metabolism preserved ${formulas.formatDecimal(offlineGain)} biomass.`),
-          ])
-        : withOffline.log,
-    })
+    return {
+      state: recalculateDerivedState({
+        ...withOffline,
+        lastSaveTime: now,
+        lastTickTime: now,
+        _offlineEvents: narrative?.events ?? [],
+        _pendingOfflineEvents: [],
+        log: offlineGain.gt(0)
+          ? clampLog([
+              ...withOffline.log,
+              createLogEntry(`Dormant metabolism preserved ${formulas.formatDecimal(offlineGain)} biomass.`),
+            ])
+          : withOffline.log,
+      }),
+      narrative,
+    }
   } catch {
     return {
-      ...createFreshState(),
-      log: clampLog([
-        '> Spore viability confirmed.',
-        '> Host contact established: dead leaf tissue.',
-        '> Awaiting first absorption cycle.',
-        createLogEntry('Save data corruption detected. Fresh culture initiated.'),
-      ]),
+      state: {
+        ...createFreshState(),
+        log: clampLog([
+          '> Spore viability confirmed.',
+          '> Host contact established: dead leaf tissue.',
+          '> Awaiting first absorption cycle.',
+          createLogEntry('Save data corruption detected. Fresh culture initiated.'),
+        ]),
+      },
+      narrative: null,
     }
   }
+}
+
+export function loadState(): GameState {
+  return loadStateWithNarrative().state
 }
 
 // --- SERIALIZATION ---
@@ -1690,6 +1922,24 @@ interface SerializedState {
   lastTickTime: number
   log: string[]
   visibility?: GameState['visibility']
+  hostEchoes: Record<number, HostEchoType>
+  _currentHostClickDamage: string
+  _currentHostPassiveDamage: string
+  _currentHostDefenseEventsSurvived: number
+  _offlineEvents?: Array<{
+    type: OfflineEvent['type']
+    name: string
+    durationMs: number
+    outcome: OfflineEvent['outcome']
+    biomassDelta?: string
+  }>
+  _pendingOfflineEvents?: Array<{
+    type: OfflineEvent['type']
+    name: string
+    durationMs: number
+    outcome: OfflineEvent['outcome']
+    biomassDelta?: string
+  }>
 }
 
 function toDecimal(value: string | number | Decimal): Decimal {
@@ -1743,7 +1993,26 @@ function serialize(s: GameState): SerializedState {
     lastTickTime: s.lastTickTime,
     log: s.log,
     visibility: s.visibility,
+    hostEchoes: s.hostEchoes,
+    _currentHostClickDamage: s._currentHostClickDamage.toString(),
+    _currentHostPassiveDamage: s._currentHostPassiveDamage.toString(),
+    _currentHostDefenseEventsSurvived: s._currentHostDefenseEventsSurvived,
+    _offlineEvents: s._offlineEvents.map((event) => ({
+      ...event,
+      biomassDelta: event.biomassDelta?.toString(),
+    })),
+    _pendingOfflineEvents: s._pendingOfflineEvents.map((event) => ({
+      ...event,
+      biomassDelta: event.biomassDelta?.toString(),
+    })),
   }
+}
+
+function normalizeOfflineEvents(rawEvents: SerializedState['_offlineEvents']): OfflineEvent[] {
+  return (rawEvents ?? []).map((event) => ({
+    ...event,
+    biomassDelta: event.biomassDelta ? toDecimal(event.biomassDelta) : undefined,
+  }))
 }
 
 function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
@@ -1820,6 +2089,12 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
       isNew: raw.visibility?.isNew ?? {},
       generatorPanelUnlockAt: raw.visibility?.generatorPanelUnlockAt ?? null,
     },
+    hostEchoes: raw.hostEchoes ?? {},
+    _currentHostClickDamage: toDecimal(raw._currentHostClickDamage ?? base._currentHostClickDamage),
+    _currentHostPassiveDamage: toDecimal(raw._currentHostPassiveDamage ?? base._currentHostPassiveDamage),
+    _currentHostDefenseEventsSurvived: raw._currentHostDefenseEventsSurvived ?? base._currentHostDefenseEventsSurvived,
+    _offlineEvents: normalizeOfflineEvents(raw._offlineEvents),
+    _pendingOfflineEvents: normalizeOfflineEvents(raw._pendingOfflineEvents),
   }
 
   return checkVisibilityUnlocks(recalculateDerivedState(normalized), now)
@@ -1843,7 +2118,8 @@ export function handleVisibilityChange(state: GameState): GameState {
       lastSaveTime: now,
       lastTickTime: now,
     },
-    offlineGain
+    offlineGain,
+    'passive'
   )
 
   const updated = offlineGain.gt(0)
