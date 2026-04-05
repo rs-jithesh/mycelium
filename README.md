@@ -1,47 +1,101 @@
-# Svelte + TS + Vite
+# The Mycelium Protocol
 
-This template should help get you started developing with Svelte and TypeScript in Vite.
+A browser-based incremental (idle/clicker) game themed around fungal colony expansion. Grow your mycelium network by accumulating biomass, purchasing generator tiers, evolving through strain specialization, consuming progressively larger hosts, and eventually prestiging via "Spore Release."
 
-## Recommended IDE Setup
+## Tech Stack
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+| Technology | Role |
+|---|---|
+| Svelte 5 | UI framework |
+| TypeScript | Primary language |
+| Vite 8 | Build tool |
+| Tailwind CSS v4 | Styling |
+| break_eternity.js | Arbitrary-precision math for large numbers |
+| GitHub Pages | Deployment target |
 
-## Need an official Svelte framework?
+## Setup
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
+**Prerequisites:** Node.js 20+
 
-## Technical considerations
+```bash
+# Install dependencies
+npm install
 
-**Why use this over SvelteKit?**
+# Start development server
+npm run dev
 
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
+# Build for production
+npm run build
 
-This template contains as little as possible to get started with Vite + TypeScript + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
+# Preview production build
+npm run preview
 
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
-
-**Why `global.d.ts` instead of `compilerOptions.types` inside `jsconfig.json` or `tsconfig.json`?**
-
-Setting `compilerOptions.types` shuts out all other types not explicitly listed in the configuration. Using triple-slash references keeps the default TypeScript setting of accepting type information from the entire workspace, while also adding `svelte` and `vite/client` type information.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `allowJs` in the TS template?**
-
-While `allowJs: false` would indeed prevent the use of `.js` files in the project, it does not prevent the use of JavaScript syntax in `.svelte` files. In addition, it would force `checkJs: false`, bringing the worst of both worlds: not being able to guarantee the entire codebase is TypeScript, and also having worse typechecking for the existing JavaScript. In addition, there are valid use cases in which a mixed codebase may be relevant.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/rixo/svelte-hmr#svelte-hmr).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```ts
-// store.ts
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
+# Type-check
+npm run check
 ```
+
+## Gameplay
+
+### Core Loop
+
+1. **Absorb** -- Click to generate biomass (primary currency)
+2. **Buy Generators** -- Spend biomass on 8 tiers of passive producers (Hyphae Strand through Planetary Membrane)
+3. **Advance Hosts** -- Consume hosts across 8 stages (Dead Leaf through The Biosphere), each with escalating health pools
+4. **Allocate Stats** -- Earn stat points on host advancement and distribute them across Virulence, Resilience, and Complexity
+5. **Prestige** -- Trigger a "Spore Release" to reset your run in exchange for a Genetic Memory multiplier
+
+### Strains
+
+Choose a specialization that shapes your playstyle:
+
+- **Parasite** -- Click-focused, rewarding active play
+- **Symbiote** -- Passive/zero-click, favoring idle progression
+- **Saprophyte** -- Balanced hybrid (unlocked after first prestige)
+
+### Skills & Upgrades
+
+- **9 Skills** across 3 branches, unlocked at Host Stage 3
+- **9 Upgrades** -- 3 early-game and 6 for higher generator tiers (5-8)
+
+### Defense Events
+
+Survive 17 different defense events using one of 3 countermeasures (locked once equipped per run).
+
+### Other Features
+
+- **Progressive UI reveal** -- Elements unlock at gameplay milestones
+- **Offline gains** -- Up to 3 hours of offline progress at 10% base efficiency
+- **Auto-save** -- Every 30 seconds via localStorage
+- **In-game Wiki** -- 7 sections with 16+ reference entries
+
+## UI
+
+4 views with a dark terminal aesthetic (CRT scanlines, green-on-dark palette):
+
+- **Terminal** -- Main gameplay screen
+- **Evolution** -- Strain selection, stat allocation, skill trees
+- **Spore** -- Prestige interface
+- **Wiki** -- In-game reference
+
+Responsive layout with separate desktop and mobile markup.
+
+## Project Structure
+
+```
+src/
+  engine/        # Core game logic
+    balance.config.ts   # All tunable constants
+    values.ts           # Default state, getters/setters
+    game.ts             # Type definitions and static data
+    formulas.ts         # Pure calculation functions
+    happenings.ts       # State transitions (tick, buy, prestige, etc.)
+  stores/
+    gameStore.ts        # Svelte store wrapping engine actions
+  lib/             # Shared types and data
+  utils/           # Utility functions
+docs/              # Design documents and references
+```
+
+## Deployment
+
+Automated via GitHub Actions (`.github/workflows/deploy.yml`) to GitHub Pages at `/mycelium/`.
