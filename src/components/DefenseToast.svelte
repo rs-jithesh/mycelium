@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import { BALANCE } from '../engine/balance.config'
   import { countermeasureDefinitions } from '../lib/game'
   import type { ActiveDefenseEvent, DefenseEventId, GameState } from '../lib/game'
 
   export let state: GameState
+
+  const DISMISSED_ACTIVE_TOASTS_STORAGE_KEY = 'mycelium-dismissed-defense-toasts'
 
   let forecastDismissed = false
   let lastForecastKey = ''
@@ -14,6 +16,7 @@
   let previousActiveEventKeys = ''
   let previousWasInWarningWindow = false
   let missedRollTimer: number | undefined
+  let dismissedActiveToastKeys = new Set<string>()
 
   const eventDisplayNames: Partial<Record<DefenseEventId, string>> = {
     drought: 'Drought',
@@ -67,6 +70,26 @@
     return event.multiplier.lt(1)
   }
 
+  function getActiveEventKey(event: ActiveDefenseEvent): string {
+    return `${event.id}:${event.endsAt}`
+  }
+
+  function persistDismissedActiveToastKeys() {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(
+      DISMISSED_ACTIVE_TOASTS_STORAGE_KEY,
+      JSON.stringify(Array.from(dismissedActiveToastKeys))
+    )
+  }
+
+  function dismissActiveToast(event: ActiveDefenseEvent) {
+    dismissedActiveToastKeys = new Set([...dismissedActiveToastKeys, getActiveEventKey(event)])
+    persistDismissedActiveToastKeys()
+  }
+
   function clearMissedRollToastTimer() {
     if (missedRollTimer) {
       window.clearTimeout(missedRollTimer)
@@ -84,6 +107,7 @@
   }
 
   $: activeEvents = state.activeDefenseEvents
+  $: visibleActiveEvents = activeEvents.filter((event) => !dismissedActiveToastKeys.has(getActiveEventKey(event)))
   $: activeEventKeys = activeEvents.map((event) => `${event.id}:${event.endsAt}`).join('|')
   $: timeUntilCheck = state.nextDefenseCheckAt - Date.now()
   $: forecastSeconds = Math.max(0, Math.ceil(timeUntilCheck / 1000))
@@ -131,6 +155,34 @@
     timeUntilCheck <= BALANCE.DEFENSE_FORECAST_WARNING_MS
   )
 
+  $: {
+    const activeKeys = new Set(activeEvents.map((event) => getActiveEventKey(event)))
+    const nextDismissedKeys = new Set(
+      Array.from(dismissedActiveToastKeys).filter((key) => activeKeys.has(key))
+    )
+
+    if (nextDismissedKeys.size !== dismissedActiveToastKeys.size) {
+      dismissedActiveToastKeys = nextDismissedKeys
+      persistDismissedActiveToastKeys()
+    }
+  }
+
+  onMount(() => {
+    const raw = window.localStorage.getItem(DISMISSED_ACTIVE_TOASTS_STORAGE_KEY)
+    if (!raw) {
+      return
+    }
+
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        dismissedActiveToastKeys = new Set(parsed.filter((value): value is string => typeof value === 'string'))
+      }
+    } catch {
+      dismissedActiveToastKeys = new Set()
+    }
+  })
+
   onDestroy(() => {
     clearMissedRollToastTimer()
   })
@@ -147,11 +199,21 @@
     </div>
   {/if}
 
-  {#each activeEvents as event (`${event.id}-${event.endsAt}`)}
+  {#each visibleActiveEvents as event (`${event.id}-${event.endsAt}`)}
     <div class="toast toast--active" role="alert" aria-live="assertive">
       <div class="toast-header">
         <span class="toast-tag toast-tag--danger">!! DEFENSE EVENT</span>
-        <span class="toast-timer">{formatCountdown(getRemainingSeconds(event))}</span>
+        <div class="toast-header__actions">
+          <span class="toast-timer">{formatCountdown(getRemainingSeconds(event))}</span>
+          <button
+            class="toast-dismiss"
+            type="button"
+            aria-label={`Dismiss ${event.name}`}
+            on:click={() => dismissActiveToast(event)}
+          >
+            X
+          </button>
+        </div>
       </div>
       <div class="toast-title">{event.name}</div>
       <div class="toast-body">{event.description}</div>
