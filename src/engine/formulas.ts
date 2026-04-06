@@ -470,35 +470,9 @@ export function getGeneratorProduction(state: GameState, generatorId: GeneratorI
   return production.mul(getProductionMultiplier(state, generatorId))
 }
 
-export function getGeneratorProductionPerBuy(state: GameState, generatorId: GeneratorId): Decimal {
+export function getGeneratorProductionPerBuy(_state: GameState, generatorId: GeneratorId): Decimal {
   const definition = getGenDef(generatorId)
-  const owned = state.generators[generatorId].owned
-
-  // Note: disruption is intentionally NOT checked here — the buy-gain label shows what
-  // the next purchase will produce once the disruption clears, not the current blocked output.
-
-  const baseProduction = definition.baseProduction
-  const multiplier = getProductionMultiplier(state, generatorId)
-
-  if (state.strain === 'symbiote') {
-    const totalOwned = generatorDefinitions.reduce(
-      (total, def) => total + state.generators[def.id].owned,
-      0
-    )
-    const currentOthers = Math.max(0, totalOwned - owned)
-    const futureOthers = Math.max(0, totalOwned - owned + 1)
-
-    const currentBonus = 1 + currentOthers * BALANCE.SYMBIOTE_SCALING_PER_OTHER
-    const futureBonus = 1 + futureOthers * BALANCE.SYMBIOTE_SCALING_PER_OTHER
-
-    const strainDef = getStrainDef(state.strain)
-    if (strainDef) {
-      const baseMultiplier = strainDef.passiveModifier
-      return baseProduction.mul(baseMultiplier).mul(multiplier).mul(futureBonus - currentBonus)
-    }
-  }
-
-  return baseProduction.mul(multiplier)
+  return definition.baseProduction
 }
 
 export function calculateBiomassPerSecond(state: GameState): Decimal {
