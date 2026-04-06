@@ -5,6 +5,7 @@
  */
 
 import Decimal from 'break_eternity.js'
+import { BALANCE } from './balance.config'
 import type {
   BuyAmount,
   StrainId,
@@ -49,7 +50,7 @@ export function createDefaultState(): GameState {
     biomass: new Decimal(0),
     biomassPerClick: new Decimal(1),
     biomassPerSecond: new Decimal(0),
-    lifetimeBiomass: new Decimal(0),
+    lifetimeBiomass: new Decimal(5),
     geneticMemory: new Decimal(0),
     signal: 0,
     signalPerSecond: 0,
@@ -63,8 +64,8 @@ export function createDefaultState(): GameState {
     hostName: 'Dead Leaf',
     stageLabel: 'Germination',
     subtitle: "The Leaf Doesn't Notice",
-    hostHealth: new Decimal(1_000),
-    hostMaxHealth: new Decimal(1_000),
+    hostHealth: new Decimal(BALANCE.HOST_HEALTH[0]),
+    hostMaxHealth: new Decimal(BALANCE.HOST_HEALTH[0]),
     hostCompleted: false,
     strain: null,
     mutationPoints: 0,
@@ -124,6 +125,8 @@ export function createDefaultState(): GameState {
     _currentHostDefenseEventsSurvived: 0,
     _offlineEvents: [],
     _pendingOfflineEvents: [],
+    hostCorruptionPercent: 0,
+    manifestationQueue: [],
   }
 }
 

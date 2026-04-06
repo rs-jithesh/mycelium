@@ -27,6 +27,9 @@
   --surface-tint: rgba(0, 230, 57, 0.05);
   --panel-glow: 0 0 40px var(--surface-tint);
 
+  /* Corruption / amber accent */
+  --amber: #FFB000;
+
   /* Scrollbar tokens */
   --scrollbar-width: 8px;
   --scrollbar-track: rgba(255, 255, 255, 0.03);
@@ -574,6 +577,10 @@ body::after {
 
 .system-bar__status > span:nth-child(3) {
   min-width: 11ch;
+}
+
+.stage-label {
+  color: var(--amber);
 }
 
 .system-pill {
@@ -1133,11 +1140,83 @@ body::after {
 
 .analysis-alert {
   align-self: flex-start;
-  background: rgba(147, 0, 10, 0.8);
-  color: #ffdada;
-  padding: 0.35rem 0.55rem;
-  letter-spacing: 0.08em;
+  padding: 0.5rem 0.7rem;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.analysis-alert--low {
+  background: rgba(30, 100, 50, 0.5);
+  border: 1px solid rgba(60, 180, 90, 0.4);
+  color: #a0d8b0;
+}
+
+.analysis-alert--moderate {
+  background: rgba(140, 120, 20, 0.5);
+  border: 1px solid rgba(200, 170, 40, 0.4);
+  color: #d4c870;
+}
+
+.analysis-alert--severe {
+  background: rgba(180, 80, 20, 0.5);
+  border: 1px solid rgba(220, 120, 40, 0.4);
+  color: #e8a878;
+}
+
+.analysis-alert--critical {
+  background: rgba(147, 0, 10, 0.6);
+  border: 1px solid rgba(200, 40, 30, 0.5);
+  color: #ffdada;
+}
+
+.analysis-alert__header {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.analysis-alert__severity {
+  font-weight: 600;
+}
+
+.analysis-alert--low .analysis-alert__severity {
+  color: #60e890;
+}
+
+.analysis-alert--moderate .analysis-alert__severity {
+  color: #f0d840;
+}
+
+.analysis-alert--severe .analysis-alert__severity {
+  color: #f0a050;
+}
+
+.analysis-alert--critical .analysis-alert__severity {
+  color: #ff6060;
+}
+
+.analysis-alert__name {
+  font-weight: 600;
+}
+
+.analysis-alert__timer {
+  opacity: 0.7;
+  font-size: 0.85em;
+}
+
+.analysis-alert__penalty {
+  font-size: 0.85em;
+  opacity: 0.85;
+  margin-top: 0.25rem;
+}
+
+.analysis-alert__flavor {
+  font-size: 0.75em;
+  opacity: 0.55;
+  margin-top: 0.4rem;
+  font-style: italic;
+  color: inherit;
 }
 
 .analysis-alerts {
@@ -1162,15 +1241,15 @@ body::after {
   width: 100%;
   min-height: 2.5rem;
   overflow: hidden;
-  border: 1px solid rgba(0, 246, 62, 0.22);
+  border: 1px solid rgba(255, 176, 0, 0.22);
   background: var(--surface-lowest);
 }
 
 .analysis-progress-bar__fill {
   position: absolute;
   inset: 0 auto 0 0;
-  background: var(--primary);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--primary) 24%, transparent);
+  background: var(--amber);
+  box-shadow: 0 0 14px rgba(255, 176, 0, 0.24);
 }
 
 .analysis-progress-bar__label {
@@ -1180,7 +1259,7 @@ body::after {
   align-items: center;
   justify-content: center;
   padding: 0 0.75rem;
-  color: #041006;
+  color: #1a0e00;
   font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1194,7 +1273,7 @@ body::after {
 }
 
 .analysis-progress-bar__label--fill {
-  color: #041006;
+  color: #1a0e00;
   z-index: 2;
 }
 
@@ -1918,11 +1997,80 @@ body::after {
   margin-top: 1rem;
   padding: 0.9rem;
   background: rgba(0, 0, 0, 0.28);
-  border-left: 1px solid rgba(255, 218, 218, 0.65);
 }
 
 .mobile-alert-card__icon {
   color: #ffdad6;
+}
+
+.mobile-alert-card__event {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.5rem;
+  border-left: 2px solid;
+}
+
+.mobile-alert-card__event:last-child {
+  margin-bottom: 0;
+}
+
+.mobile-alert-card__event--low {
+  background: rgba(30, 100, 50, 0.3);
+  border-color: #60e890;
+}
+
+.mobile-alert-card__event--moderate {
+  background: rgba(140, 120, 20, 0.3);
+  border-color: #d4c870;
+}
+
+.mobile-alert-card__event--severe {
+  background: rgba(180, 80, 20, 0.3);
+  border-color: #f0a050;
+}
+
+.mobile-alert-card__event--critical {
+  background: rgba(147, 0, 10, 0.4);
+  border-color: #ff6060;
+}
+
+.mobile-alert-card__header {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+.mobile-alert-card__event--low .mobile-alert-card__header {
+  color: #a0d8b0;
+}
+
+.mobile-alert-card__event--moderate .mobile-alert-card__header {
+  color: #d4c870;
+}
+
+.mobile-alert-card__event--severe .mobile-alert-card__header {
+  color: #e8a878;
+}
+
+.mobile-alert-card__event--critical .mobile-alert-card__header {
+  color: #ffdada;
+}
+
+.mobile-alert-card__penalty {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin: 0.2rem 0 0 0;
+  letter-spacing: 0.04em;
+}
+
+.mobile-alert-card__flavor {
+  font-size: 0.65rem;
+  font-style: italic;
+  opacity: 0.6;
+  margin: 0.3rem 0 0 0;
+  color: inherit;
 }
 
 .mobile-alert-card p,

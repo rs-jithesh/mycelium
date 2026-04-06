@@ -19,10 +19,10 @@ export const BALANCE = {
   SIGNAL: {
 
     // Base production rate — Signal units per second at Stage 3 unlock
-    BASE_PRODUCTION_PER_SECOND: 0.5,
+    BASE_PRODUCTION_PER_SECOND: 0.15,
 
     // Production scales with stage beyond Stage 3
-    PRODUCTION_PER_STAGE_BONUS: 0.3,
+    PRODUCTION_PER_STAGE_BONUS: 0.08,
 
     // Decay — Signal lost per second when above DECAY_THRESHOLD
     DECAY_RATE_PER_SECOND: 0.08,
@@ -34,10 +34,10 @@ export const BALANCE = {
     PENALTY_RECOVERY_RATE: 0.15,
 
     // Base cap — maximum Signal storable
-    BASE_CAP: 10,
+    BASE_CAP: 8,
 
     // Complexity stat bonuses
-    COMPLEXITY_CAP_BONUS_PER_POINT: 2,
+    COMPLEXITY_CAP_BONUS_PER_POINT: 1.5,
     COMPLEXITY_DECAY_REDUCTION_PER_POINT: 0.005,
 
     // Strain modifiers
@@ -46,10 +46,10 @@ export const BALANCE = {
     STRAIN_SAPROPHYTE_DECAY_MULT: 0.60,
 
     // Signal spend costs
-    COST_COORDINATION_COMMAND: 3,
-    COST_VULNERABILITY_WINDOW: 6,
-    COST_RIVAL_SUPPRESSION: 8,
-    COST_NETWORK_ISOLATION: 5,
+    COST_COORDINATION_COMMAND: 2,
+    COST_VULNERABILITY_WINDOW: 4,
+    COST_RIVAL_SUPPRESSION: 5,
+    COST_NETWORK_ISOLATION: 3,
 
     // Coordination command duration
     COORDINATION_DURATION_MS: 30 * 1000,
@@ -78,8 +78,8 @@ export const BALANCE = {
   // Maximum offline time cap in milliseconds (3 hours)
   OFFLINE_CAP_MS: 3 * 60 * 60 * 1000,
 
-  // Base offline efficiency (10% of normal production)
-  BASE_OFFLINE_EFFICIENCY: 0.1,
+  // Base offline efficiency (100% of normal production)
+  BASE_OFFLINE_EFFICIENCY: 1.0,
 
   // Dormancy Protocol skill offline efficiency bonus (+15%)
   DORMANCY_PROTOCOL_OFFLINE_BONUS: 0.15,
@@ -87,36 +87,36 @@ export const BALANCE = {
   // Resilience >= 3 offline efficiency bonus (+10%)
   RESILIENCE_OFFLINE_BONUS: 0.1,
 
-  // Generator cost scaling exponent — lowered from 1.18 to slow bulk-buy curve
-  GENERATOR_COST_EXPONENT: 1.15,
+  // Generator cost scaling exponent — high enough that each purchase matters
+  GENERATOR_COST_EXPONENT: 1.28,
 
   // Generator base costs (index 0 = Tier 1: Hyphae Strand)
   GENERATOR_BASE_COSTS: [
-    10, 120, 6_000, 100_000,
-    1_800_000, 4e10, 2e15, 1.5e21,
+    10, 80, 600, 4_000,
+    30_000, 250_000, 2_000_000, 15_000_000,
   ],
 
   // Generator base production per second (index 0 = Tier 1)
   GENERATOR_BASE_PRODUCTION: [
-    0.1, 90, 720, 8_000,
-    100_000, 2.5e9, 6e14, 1.5e20,
+    0.008, 0.04, 0.2, 1,
+    5, 25, 120, 600,
   ],
 
   // Previous-tier ownership needed to reveal the next generator tier
-  GENERATOR_UNLOCK_THRESHOLDS: [0, 18, 12, 8, 10, 10, 10, 10],
+  GENERATOR_UNLOCK_THRESHOLDS: [0, 8, 7, 6, 8, 7, 6, 5],
 
   // Tier 4 unlocks when Stage 2 host progress >= this value (0–100 scale)
-  TIER4_STAGE2_HOST_PROGRESS_GATE: 25,
+  TIER4_STAGE2_HOST_PROGRESS_GATE: 0,
 
   // Stage gate: minimum stage that must be active before this tier is visible
   // (0 = no stage gate)
-  GENERATOR_STAGE_GATES: [0, 0, 2, 2, 3, 4, 6, 7],
+  GENERATOR_STAGE_GATES: [0, 0, 1, 2, 2, 3, 4, 5],
 
   // Genetic Memory prestige threshold (minimum lifetime biomass to earn any Gamma)
-  GENETIC_MEMORY_DIVISOR: 1e24,
+  GENETIC_MEMORY_DIVISOR: 5e11,
 
   // Genetic Memory gain exponent. Lower values slow permanent scaling hard in the late game.
-  GENETIC_MEMORY_GAIN_EXPONENT: 0.2,
+  GENETIC_MEMORY_GAIN_EXPONENT: 0.18,
 
   // Genetic Memory bonus per Gamma — lowered from 0.005 to slow permanent scaling
   GENETIC_MEMORY_BONUS_PER_GAMMA: 0.003,
@@ -201,13 +201,13 @@ export const BALANCE = {
 
   // Upgrade tuning. Keep broad effects modest so they do not erase tier pacing.
   CHITINOUS_REINFORCEMENT_COST: 400,
-  CHITINOUS_REINFORCEMENT_BASE_BONUS: 0.18,
+  CHITINOUS_REINFORCEMENT_BASE_BONUS: 0.12,
   EXOENZYME_SECRETION_COST: 30_000,
-  EXOENZYME_SECRETION_BASE_BONUS: 0.08,
+  EXOENZYME_SECRETION_BASE_BONUS: 0.05,
   EXOENZYME_SECRETION_MAX_TIER: 3,
   LATERAL_TRANSFER_COST: 500_000,
-  LATERAL_TRANSFER_CLICK_MULTIPLIER: 2,
-  LATERAL_TRANSFER_TIER4_BASE_BONUS: 0.2,
+  LATERAL_TRANSFER_CLICK_MULTIPLIER: 1.35,
+  LATERAL_TRANSFER_TIER4_BASE_BONUS: 0.3,
   LATERAL_TRANSFER_TIER4_STAGE3_BONUS: 0.8,
   RHIZOMORPH_LOWER_TIER_SCALING_PER_OWNED: 0.015,
   RHIZOMORPH_LOWER_TIER_SCALING_CAP: 2.5,
@@ -238,46 +238,40 @@ export const BALANCE = {
 
   // Host health values per stage (index 0 = Stage 1)
   HOST_HEALTH: [
-    1_000,               // Stage 1: ~12m
-    26_300_000,          // Stage 2: ~1.5h
-    3_800_000_000,       // Stage 3: ~4h
-    122_000_000_000,     // Stage 4: ~10h
-    1.7e15,              // Stage 5: ~24h
-    6e16,                // Stage 6: ~2d
-    3.6e22,              // Stage 7: ~4d
-    6e26,                // Stage 8: ~2-3d final push
+    600, 14_000, 90_000, 320_000,
+    1_000_000, 5_000_000, 25_000_000, 100_000_000,
   ],
 
   // Skill costs keyed by skill ID (all biomass costs)
   SKILL_COSTS: {
-    'enzymatic-breakdown':   5e8,
-    'chitin-shell':          8e8,
-    'quorum-recursion':      1.2e9,
-    'acidic-secretion':      2e11,
-    'dormancy-protocol':     4e11,
-    'signal-amplification':  6e11,
-    'hemorrhagic-spread':    5e13,
-    'spore-hardening':       8e13,
-    'distributed-cognition': 1.2e14,
+    'enzymatic-breakdown':   8e4,
+    'chitin-shell':          1.2e5,
+    'quorum-recursion':      2e5,
+    'acidic-secretion':      5e6,
+    'dormancy-protocol':     8e6,
+    'signal-amplification':  1.2e7,
+    'hemorrhagic-spread':    1e8,
+    'spore-hardening':       1.5e8,
+    'distributed-cognition': 2.5e8,
   } as Record<import('../lib/game').SkillId, number>,
 
   // Per-stage click value as fraction of max host health.
   // Ensures clicking remains meaningful at every stage, independent of BPS.
   // Parasite gets 1.5x (same ratio as CLICK_BPS_FRACTION_PARASITE vs DEFAULT).
   CLICK_HOST_HEALTH_FRACTION_DEFAULT: [
-    0.001,   0.0005,  0.0003,  0.0002,
-    0.00015, 0.0001,  0.00008, 0.00005,
+    0.004, 0.001, 0.0005, 0.0005,
+    0.0003, 0.0002, 0.0001, 0.00005,
   ],
   CLICK_HOST_HEALTH_FRACTION_PARASITE: [
-    0.0015,  0.00075, 0.00045, 0.0003,
-    0.000225, 0.00015, 0.00012, 0.000075,
+    0.006, 0.0015, 0.00075, 0.00075,
+    0.00045, 0.0003, 0.00015, 0.000075,
   ],
 
   // BPS fraction used as base click value, differentiated by strain.
   // Parasite is the active-play strain and gets a higher fraction.
   // Symbiote and Saprophyte use the lower default.
-  CLICK_BPS_FRACTION_DEFAULT: 0.04,
-  CLICK_BPS_FRACTION_PARASITE: 0.06,
+  CLICK_BPS_FRACTION_DEFAULT: 0.02,
+  CLICK_BPS_FRACTION_PARASITE: 0.035,
 
   // Signal production multiplier divisor (run 2+ only).
   // Applied as: multiplier × (1 + signal / SIGNAL_PRODUCTION_DIVISOR)
@@ -285,9 +279,9 @@ export const BALANCE = {
   SIGNAL_PRODUCTION_DIVISOR: 20,
 
   // Late-game click upgrade costs and multipliers
-  NEURAL_PROPAGATION_COST: 3e18,
+  NEURAL_PROPAGATION_COST: 5e11,
   NEURAL_PROPAGATION_CLICK_MULTIPLIER: 1.5,
-  TERMINUS_STRIKE_COST: 8e29,
+  TERMINUS_STRIKE_COST: 2e16,
   TERMINUS_STRIKE_CLICK_MULTIPLIER: 2,
 
   // Click boost applied during any active defense event.

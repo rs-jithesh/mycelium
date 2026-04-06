@@ -135,7 +135,7 @@ function getGeneratorNameById(generatorId: string): string {
   return generatorDefinitions.find((generator) => generator.id === generatorId)?.name ?? generatorId
 }
 
-type DefenseFlavorDefinition = {
+export type DefenseFlavorDefinition = {
   id: DefenseEventId
   name: string
   description: string
@@ -148,7 +148,7 @@ type DefenseFlavorDefinition = {
   expirationLog: string
 }
 
-const defenseFlavorDefinitions: Record<DefenseEventId, DefenseFlavorDefinition> = {
+export const defenseFlavorDefinitions: Record<DefenseEventId, DefenseFlavorDefinition> = {
   'drought': {
     id: 'drought',
     name: 'Drought',
@@ -483,6 +483,42 @@ function padGeneratorTiers(tiers: boolean[]): boolean[] {
   return [...tiers, ...new Array(expected - tiers.length).fill(false)]
 }
 
+// --- CORRUPTION & MANIFESTATIONS ---
+
+const MANIFESTATION_THRESHOLDS = [
+  { at: 10, msg: 'The substrate twitches. Something notices.' },
+  { at: 25, msg: "Veins darken. The host's defenses stir." },
+  { at: 50, msg: 'Half-consumed. You feel the wood beyond.' },
+  { at: 75, msg: 'The host is hollow. Only structure remains.' },
+  { at: 90, msg: 'Final resistance crumbles. Victory is near.' },
+  { at: 100, msg: 'Consumption complete. The network grows.' },
+]
+
+function calculateCorruptionPercent(health: Decimal, maxHealth: Decimal): number {
+  if (maxHealth.lte(0)) return 100
+  const consumed = maxHealth.sub(health)
+  return Math.min(100, Math.max(0, consumed.div(maxHealth).mul(100).toNumber()))
+}
+
+function checkManifestations(state: GameState, newCorruption: number, oldCorruption: number): GameState {
+  const newManifestations: string[] = []
+
+  for (const threshold of MANIFESTATION_THRESHOLDS) {
+    if (oldCorruption < threshold.at && newCorruption >= threshold.at) {
+      newManifestations.push(threshold.msg)
+    }
+  }
+
+  if (newManifestations.length > 0) {
+    return {
+      ...state,
+      manifestationQueue: [...state.manifestationQueue, ...newManifestations],
+    }
+  }
+
+  return state
+}
+
 function gainBiomass(state: GameState, amount: Decimal, source: 'click' | 'passive'): GameState {
   if (amount.lte(0)) return state
 
@@ -493,7 +529,9 @@ function gainBiomass(state: GameState, amount: Decimal, source: 'click' | 'passi
     ? { _currentHostClickDamage: state._currentHostClickDamage.add(amount) }
     : { _currentHostPassiveDamage: state._currentHostPassiveDamage.add(amount) }
 
-  return recalculateDerivedState({
+  const corruptionPercent = calculateCorruptionPercent(remainingHost, state.hostMaxHealth)
+
+  const nextState = recalculateDerivedState({
     ...state,
     ...trackingUpdate,
     biomass: state.biomass.add(amount),
@@ -501,7 +539,10 @@ function gainBiomass(state: GameState, amount: Decimal, source: 'click' | 'passi
     hostHealth: remainingHost,
     hostCompleted: remainingHost.lte(0),
     highestStageReached: Math.max(state.highestStageReached, state.currentStage),
+    hostCorruptionPercent: corruptionPercent,
   })
+
+  return checkManifestations(nextState, corruptionPercent, state.hostCorruptionPercent)
 }
 
 function spendBiomass(state: GameState, amount: Decimal): GameState {
@@ -851,7 +892,7 @@ export function checkVisibilityUnlocks(state: GameState, now = Date.now()): Game
     }
   }
 
-  if (!next.visibility.stageDisplay && next.currentStage >= 2) {
+  if (!next.visibility.stageDisplay && next.currentStage >= 1) {
     next = unlockVisibilityFlag(next, 'stageDisplay')
   }
 
@@ -939,6 +980,9 @@ export function checkVisibilityUnlocks(state: GameState, now = Date.now()): Game
 
 // --- CORE TICK ---
 
+const MANIFESTATION_DRAIN_INTERVAL_MS = 2000
+let _manifestationDrainAccumulator = 0
+
 export function tick(state: GameState, now = Date.now()): GameState {
   let next = expireDefenseEvents(state, now)
   next = tryTriggerDefenseEvent(next, now)
@@ -959,6 +1003,22 @@ export function tick(state: GameState, now = Date.now()): GameState {
   next = tickSignalSystem(next, deltaMs)
   next = tickDefenseResponseState(next, deltaMs)
   next = maybeAppendDefenseFlavorLog(next, deltaMs)
+
+  // Drain manifestation queue: one message every 2 seconds
+  if (next.manifestationQueue.length > 0) {
+    _manifestationDrainAccumulator += deltaMs
+    if (_manifestationDrainAccumulator >= MANIFESTATION_DRAIN_INTERVAL_MS) {
+      _manifestationDrainAccumulator = 0
+      const [msg, ...rest] = next.manifestationQueue
+      next = {
+        ...next,
+        log: appendLog(next.log, msg),
+        manifestationQueue: rest,
+      }
+    }
+  } else {
+    _manifestationDrainAccumulator = 0
+  }
 
   return checkVisibilityUnlocks(next, now)
 }
@@ -1465,6 +1525,8 @@ export function advanceStageAction(state: GameState): GameState {
     _currentHostClickDamage: new Decimal(0),
     _currentHostPassiveDamage: new Decimal(0),
     _currentHostDefenseEventsSurvived: 0,
+    hostCorruptionPercent: 0,
+    manifestationQueue: [],
     nextDefenseCheckAt: Date.now() + BALANCE.DEFENSE_EVENT_COOLDOWN_MS,
     log: clampLog([
       ...state.log,
@@ -1944,6 +2006,8 @@ interface SerializedState {
     outcome: OfflineEvent['outcome']
     biomassDelta?: string
   }>
+  hostCorruptionPercent: number
+  manifestationQueue: string[]
 }
 
 function toDecimal(value: string | number | Decimal): Decimal {
@@ -2009,6 +2073,8 @@ function serialize(s: GameState): SerializedState {
       ...event,
       biomassDelta: event.biomassDelta?.toString(),
     })),
+    hostCorruptionPercent: s.hostCorruptionPercent,
+    manifestationQueue: s.manifestationQueue,
   }
 }
 
@@ -2099,6 +2165,8 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
     _currentHostDefenseEventsSurvived: raw._currentHostDefenseEventsSurvived ?? base._currentHostDefenseEventsSurvived,
     _offlineEvents: normalizeOfflineEvents(raw._offlineEvents),
     _pendingOfflineEvents: normalizeOfflineEvents(raw._pendingOfflineEvents),
+    hostCorruptionPercent: raw.hostCorruptionPercent ?? base.hostCorruptionPercent,
+    manifestationQueue: raw.manifestationQueue ?? base.manifestationQueue,
   }
 
   return checkVisibilityUnlocks(recalculateDerivedState(normalized), now)

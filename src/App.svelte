@@ -6,6 +6,7 @@
   import TypewriterLog from './lib/ui/TypewriterLog.svelte'
   import SignalPanel from './lib/SignalPanel.svelte'
   import DefenseToast from './components/DefenseToast.svelte'
+  import HostVisual from './components/HostVisual.svelte'
   import { wikiEntries, wikiSections } from './lib/wiki'
   import { game, _pendingOfflineNarrative } from './stores/gameStore'
   import {
@@ -16,6 +17,7 @@
     getGeneratorCost,
     getGeneratorEfficiencyByOwned,
     getGeneratorProduction,
+    getGeneratorProductionPerBuy,
     getHostProgress,
     getProjectedGeneticMemoryBonusPercent,
     getProjectedGeneticMemoryGain,
@@ -26,6 +28,7 @@
     formatDuration,
   } from './engine/formulas'
   import { BALANCE } from './engine/balance.config'
+  import { defenseFlavorDefinitions } from './engine/happenings'
   import {
     countermeasureDefinitions,
     generatorDefinitions,
@@ -35,7 +38,7 @@
     strainDefinitions,
     upgradeDefinitions,
   } from './lib/game'
-  import type { CountermeasureId, DefenseEventId, GeneratorId, HostEchoDefinition, OfflineEvent, OfflineNarrative } from './lib/game'
+  import type { ActiveDefenseEvent, CountermeasureId, DefenseEventId, GeneratorId, HostEchoDefinition, OfflineEvent, OfflineNarrative } from './lib/game'
   import { formatBiomass, formatBPS } from './utils/formatNumber'
 
   type ViewId = 'terminal' | 'evolution' | 'spore' | 'wiki'
@@ -199,8 +202,14 @@
     }, updateInterval)
   }
 
-  function getModuleVersion(index: number): string {
-    return `v4.0.${index + 2}`
+  function getGeneratorBuyGain(generatorId: GeneratorId): string {
+    const gain = getGeneratorProductionPerBuy($game, generatorId)
+    const n = gain.toNumber()
+    // If value is so small it would display as 0.00, use scientific notation instead
+    const formatted = n > 0 && n < 0.005
+      ? gain.toExponential(2)
+      : formatBiomass(gain, useScientificNotation)
+    return `+${formatted}/sec`
   }
 
   function getPrimaryProblem() {
@@ -275,15 +284,14 @@
       return ''
     }
 
-    if (index === 2) {
-      return `Own ${BALANCE.GENERATOR_UNLOCK_THRESHOLDS[index]}x ${previousGenerator.name} and reach Stage 2`
+    const stageGate = BALANCE.GENERATOR_STAGE_GATES[index]
+    const threshold = BALANCE.GENERATOR_UNLOCK_THRESHOLDS[index]
+
+    if (stageGate === 0) {
+      return `Requires Stage 1, own ${threshold}x ${previousGenerator.name}`
     }
 
-    if (index === 3) {
-      return `Own ${BALANCE.GENERATOR_UNLOCK_THRESHOLDS[index]}x ${previousGenerator.name} and consume ${BALANCE.TIER4_STAGE2_HOST_PROGRESS_GATE}% of the Stage 2 host`
-    }
-
-    return `Own ${BALANCE.GENERATOR_UNLOCK_THRESHOLDS[index]}x ${previousGenerator.name} to unlock`
+    return `Requires Stage ${stageGate}, own ${threshold}x ${previousGenerator.name}`
   }
 
   function getGeneratorRelativeEfficiency(generatorId: (typeof generatorDefinitions)[number]['id']): number {
@@ -332,7 +340,9 @@
     (_, index) => index > 0 && !$game.visibility.generatorTiers[index]
   )
   $: useScientificNotation = $game.visibility.useScientificNotation
-  $: suppressionActive = $game.activeDefenseEvents.some((event) => event.multiplier.lt(1))
+  $: suppressionActive = $game.activeDefenseEvents.some(
+    (event) => event.multiplier.lt(1) || event.disabledGeneratorId != null
+  )
   $: suppressionPct = (() => {
     let combined = 1
 
@@ -343,6 +353,14 @@
     }
 
     return Math.round((1 - combined) * 100)
+  })()
+  $: suppressionLabel = (() => {
+    const hasMult = $game.activeDefenseEvents.some((e) => e.multiplier.lt(1))
+    const disrupted = $game.activeDefenseEvents.find((e) => e.disabledGeneratorId != null)
+    if (hasMult && disrupted) return `[SUPPRESSED -${suppressionPct}% / ${disrupted.disabledGeneratorId} SEVERED]`
+    if (hasMult) return `[SUPPRESSED -${suppressionPct}%]`
+    if (disrupted) return `[${disrupted.disabledGeneratorId?.replace(/-/g, ' ').toUpperCase()} SEVERED]`
+    return ''
   })()
   $: hostProgressPercent = getHostProgress($game)
   $: hostProgressLabel = formatHostProgress(hostProgressPercent)
@@ -584,6 +602,52 @@
     return formatDuration(Math.max(0, endsAt - uiNow))
   }
 
+  type EventSeverity = 'LOW' | 'MODERATE' | 'SEVERE' | 'CRITICAL'
+
+  function getEventSeverity(event: ActiveDefenseEvent): EventSeverity {
+    let totalPenalty = 0
+    if (event.multiplier.lt(1)) {
+      totalPenalty += (1 - event.multiplier.toNumber()) * 100
+    }
+    if (event.clickMultiplier && event.clickMultiplier.lt(1)) {
+      totalPenalty += (1 - event.clickMultiplier.toNumber()) * 100
+    }
+    if (totalPenalty >= 45) return 'CRITICAL'
+    if (totalPenalty >= 30) return 'SEVERE'
+    if (totalPenalty >= 15) return 'MODERATE'
+    return 'LOW'
+  }
+
+  function getEventPenaltyBreakdown(event: ActiveDefenseEvent): string[] {
+    const penalties: string[] = []
+    if (event.multiplier.lt(1)) {
+      const pct = Math.round((1 - event.multiplier.toNumber()) * 100)
+      penalties.push(`-${pct}% passive production`)
+    }
+    if (event.clickMultiplier && event.clickMultiplier.lt(1)) {
+      const pct = Math.round((1 - event.clickMultiplier.toNumber()) * 100)
+      penalties.push(`-${pct}% click absorption`)
+    }
+    return penalties
+  }
+
+  function getEventFlavorHint(event: ActiveDefenseEvent): string | null {
+    const creepLogs = defenseFlavorDefinitions[event.id]?.creepLogs
+    if (!creepLogs || creepLogs.length === 0) return null
+    const index = Math.abs(hashCode(event.id + event.endsAt)) % creepLogs.length
+    return creepLogs[index]
+  }
+
+  function hashCode(str: string): number {
+    let hash = 0
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i)
+      hash = ((hash << 5) - hash) + char
+      hash = hash & hash
+    }
+    return hash
+  }
+
   function getEquippedCountermeasure() {
     return countermeasureDefinitions.find((entry: (typeof countermeasureDefinitions)[number]) => entry.id === $game.equippedCountermeasure) ?? null
   }
@@ -823,12 +887,12 @@
             BPS:
             <span class:bps-suppressed={suppressionActive}>+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
             {#if suppressionActive}
-              <span class="bps-suppression-tag">[SUPPRESSED -{suppressionPct}%]</span>
+              <span class="bps-suppression-tag">{suppressionLabel}</span>
             {/if}
           </span>
         {/if}
         {#if $game.visibility.stageDisplay}
-          <span>STAGE: {$game.currentStage} — {$game.stageLabel.toUpperCase()}</span>
+          <span class="stage-label">STAGE: {$game.currentStage} — {$game.stageLabel.toUpperCase()}</span>
         {/if}
       </div>
     </header>
@@ -841,11 +905,18 @@
                 <div class="biomass-chamber">
                   <p class="biomass-chamber__label">CURRENT TOTAL BIOMASS</p>
                   <h2 class="biomass-chamber__value">{formatBiomass($game.biomass, useScientificNotation)}<span> Ψ</span></h2>
-                  {#if latestLogEntry}
+                  <!-- biomass-chamber__event hidden — manifestation toast replaces it -->
+                  <!-- {#if latestLogEntry}
                     <p class="biomass-chamber__event">{latestLogEntry}</p>
-                  {/if}
+                  {/if} -->
                   {#if $game.visibility.bpsDisplay}
-                    <p class="biomass-chamber__label">PASSIVE ABSORPTION :: +{formatBPS($game.biomassPerSecond, useScientificNotation)}</p>
+                    <p class="biomass-chamber__label">
+                      PASSIVE ABSORPTION ::
+                      <span class:bps-suppressed={suppressionActive}>+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
+                      {#if suppressionActive}
+                        <span class="bps-suppression-tag">{suppressionLabel}</span>
+                      {/if}
+                    </p>
                     <p class="biomass-chamber__label">CLICK :: +{formatBiomass($game.biomassPerClick, useScientificNotation)} Ψ</p>
                   {/if}
                 </div>
@@ -853,9 +924,6 @@
                 <!-- Signal economy temporarily disabled. -->
                 <!-- <SignalPanel /> -->
 
-                <div class:terminal-absorb-button={true} class:terminal-absorb-button--alone={!$game.visibility.generatorPanel}>
-                  <TerminalButton disabled={absorbProgress > 0} on:click={() => absorbWithProgress()} progress={absorbProgress}>[ INITIATE ABSORPTION ]</TerminalButton>
-                </div>
               </div>
 
               {#if $game.visibility.hostHealthBar || ($game.hostCompleted && hasNextStage($game))}
@@ -863,6 +931,16 @@
                 finishReveal('hostHealthBar')
                 finishReveal('stageDisplay')
               }}>
+              <HostVisual
+                corruption={$game.hostCorruptionPercent}
+                manifestationQueue={$game.manifestationQueue}
+                hostName={$game.hostName}
+                hostCompleted={$game.hostCompleted}
+                disabled={absorbProgress > 0}
+                progress={absorbProgress}
+                firstTime={$game.clickCount === 0}
+                on:click={() => absorbWithProgress()}
+              />
               <TerminalPanel
                 title="SUBSTRATE ANALYSIS"
                 tag="HOST"
@@ -877,8 +955,21 @@
                 {#if $game.activeDefenseEvents.length > 0}
                   <div class="analysis-alerts">
                     {#each $game.activeDefenseEvents as event}
-                      <div class="analysis-alert">
-                        {event.name.toUpperCase()}: {getRemainingDurationLabel(event.endsAt)}
+                      {@const severity = getEventSeverity(event)}
+                      {@const penalties = getEventPenaltyBreakdown(event)}
+                      {@const flavorHint = getEventFlavorHint(event)}
+                      <div class="analysis-alert analysis-alert--{severity.toLowerCase()}">
+                        <div class="analysis-alert__header">
+                          <span class="analysis-alert__severity">[{severity}]</span>
+                          <span class="analysis-alert__name">{event.name.toUpperCase()}</span>
+                          <span class="analysis-alert__timer">[{getRemainingDurationLabel(event.endsAt)}]</span>
+                        </div>
+                        {#each penalties as penalty}
+                          <div class="analysis-alert__penalty">{penalty}</div>
+                        {/each}
+                        {#if flavorHint}
+                          <div class="analysis-alert__flavor">{flavorHint}</div>
+                        {/if}
                       </div>
                     {/each}
                   </div>
@@ -1002,7 +1093,7 @@
                     <span>COST: {formatBiomass(getGeneratorCost($game, generator.id), useScientificNotation)} Ψ</span>
                   </div>
                   <div class="module-card__actions">
-                    <span>{getModuleVersion(index)}</span>
+                    <span>{getGeneratorBuyGain(generator.id)}</span>
                     <button
                       class="terminal-button terminal-button--secondary"
                       class:terminal-button--disabled={!canAffordGenerator.get(generator.id)}
@@ -1096,14 +1187,17 @@
             <span class="mobile-hero__glyph">Ψ</span>
             <h2 class="mobile-hero__value">{formatBiomass($game.biomass, useScientificNotation)}</h2>
           </div>
-          {#if latestLogEntry}
-            <p class="mobile-hero__event">{latestLogEntry}</p>
-          {/if}
+
           {#if $game.visibility.bpsDisplay}
-            <p class="mobile-hero__label">PASSIVE :: +{formatBPS($game.biomassPerSecond, useScientificNotation)}</p>
+            <p class="mobile-hero__label">
+              PASSIVE ::
+              <span class:bps-suppressed={suppressionActive}>+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
+              {#if suppressionActive}
+                <span class="bps-suppression-tag">{suppressionLabel}</span>
+              {/if}
+            </p>
             <p class="mobile-hero__label">TAP :: +{formatBiomass($game.biomassPerClick, useScientificNotation)} Ψ</p>
           {/if}
-          <TerminalButton disabled={absorbProgress > 0} on:click={() => absorbWithProgress()} progress={absorbProgress}>[ INITIATE ABSORPTION ]</TerminalButton>
 
           {#if $game.activeDefenseEvents.length > 0}
             <div class="mobile-defense-strip reveal-enter" aria-label="Active defense events">
@@ -1127,6 +1221,17 @@
         {/if}
 
         {#if $game.visibility.hostHealthBar || ($game.hostCompleted && hasNextStage($game))}
+        <div class="mobile-host-card-wrapper">
+        <HostVisual
+          corruption={$game.hostCorruptionPercent}
+          manifestationQueue={$game.manifestationQueue}
+          hostName={$game.hostName}
+          hostCompleted={$game.hostCompleted}
+          disabled={absorbProgress > 0}
+          progress={absorbProgress}
+          firstTime={$game.clickCount === 0}
+          on:click={() => absorbWithProgress()}
+        />
         <TerminalPanel title="SUBSTRATE ANALYSIS" tag="+" variant="low" bleedHeader={true} className="mobile-card">
           <div class="mobile-analysis__header">
             <div>
@@ -1148,9 +1253,23 @@
             <span class="mobile-alert-card__icon">▲</span>
             <div>
               {#if $game.activeDefenseEvents.length > 0}
-                {#each $game.activeDefenseEvents as event, index}
-                  <p>HOST DEFENSE {index + 1}</p>
-                  <strong>{event.name.toUpperCase()} [{getRemainingDurationLabel(event.endsAt)}]</strong>
+                {#each $game.activeDefenseEvents as event}
+                  {@const severity = getEventSeverity(event)}
+                  {@const penalties = getEventPenaltyBreakdown(event)}
+                  {@const flavorHint = getEventFlavorHint(event)}
+                  <div class="mobile-alert-card__event mobile-alert-card__event--{severity.toLowerCase()}">
+                    <p class="mobile-alert-card__header">
+                      <span>[{severity}]</span>
+                      <span>{event.name.toUpperCase()}</span>
+                      <span>[{getRemainingDurationLabel(event.endsAt)}]</span>
+                    </p>
+                    {#each penalties as penalty}
+                      <p class="mobile-alert-card__penalty">{penalty}</p>
+                    {/each}
+                    {#if flavorHint}
+                      <p class="mobile-alert-card__flavor">{flavorHint}</p>
+                    {/if}
+                  </div>
                 {/each}
               {:else}
                 <p>HOST DEFENSES</p>
@@ -1172,6 +1291,7 @@
             </button>
           {/if}
         </TerminalPanel>
+        </div>
         {/if}
 
         {#if $game.currentStage >= BALANCE.DEFENSE_FORECAST_UNLOCK_STAGE}
@@ -1201,21 +1321,7 @@
         </TerminalPanel>
         {/if}
 
-        {#if $game.visibility.bpsDisplay}
-        <TerminalPanel title="PROPAGATION EFFICIENCY" tag="" variant="low" className="mobile-card mobile-metrics">
-          <div class="mobile-metrics__grid">
-            <div>
-              <p>GROWTH RATE</p>
-              <strong>+{formatDecimal($game.biomassPerSecond)} Ψ/s</strong>
-            </div>
-            <div>
-              <p>METABOLISM</p>
-              <strong>{$game.hostCompleted ? '100.0%' : '94.2%'}</strong>
-            </div>
-          </div>
-          <div class="mobile-metrics__image"></div>
-        </TerminalPanel>
-        {/if}
+
 
         {#if $game.visibility.generatorPanel}
         <TerminalPanel title="GENERATOR MODULES" tag="" variant="low" className="mobile-card mobile-generators" bleedHeader={true}>

@@ -12,9 +12,9 @@ export function formatBiomass(value: { toNumber?: () => number; toExponential?: 
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`
   if (n >= 1e3) return `${(n / 1e3).toFixed(2)}K`
 
-  if (n < 100 && !Number.isInteger(n)) {
+  if (n < 1000 && !Number.isInteger(n)) {
     return n.toLocaleString(undefined, {
-      minimumFractionDigits: n < 10 ? 2 : 1,
+      minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     })
   }

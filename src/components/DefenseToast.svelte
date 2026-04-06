@@ -18,6 +18,46 @@
   let missedRollTimer: number | undefined
   let dismissedActiveToastKeys = new Set<string>()
 
+  let swipeState: Record<string, { startX: number; currentX: number }> = {}
+  const SWIPE_THRESHOLD = 100
+
+  function handleTouchStart(e: TouchEvent, eventKey: string) {
+    swipeState[eventKey] = { startX: e.touches[0].clientX, currentX: e.touches[0].clientX }
+  }
+
+  function handleTouchMove(e: TouchEvent, eventKey: string) {
+    if (!swipeState[eventKey]) return
+    swipeState[eventKey] = { ...swipeState[eventKey], currentX: e.touches[0].clientX }
+  }
+
+  function handleTouchEnd(eventKey: string, event?: ActiveDefenseEvent) {
+    if (!swipeState[eventKey]) return
+    const { startX, currentX } = swipeState[eventKey]
+    if (currentX - startX > SWIPE_THRESHOLD) {
+      if (event) {
+        dismissActiveToast(event)
+      } else {
+        forecastDismissed = true
+      }
+    }
+    delete swipeState[eventKey]
+  }
+
+  function getSwipeTransform(eventKey: string): string {
+    const state = swipeState[eventKey]
+    if (!state) return 'translateX(0)'
+    const offset = Math.max(0, state.currentX - state.startX)
+    return `translateX(${offset}px)`
+  }
+
+  function getSwipeOpacity(eventKey: string): number {
+    const state = swipeState[eventKey]
+    if (!state) return 1
+    const offset = state.currentX - state.startX
+    if (offset <= 0) return 1
+    return Math.max(0, 1 - offset / 300)
+  }
+
   const eventDisplayNames: Partial<Record<DefenseEventId, string>> = {
     drought: 'Drought',
     'beetle-disruption': 'Beetle Disruption',
@@ -199,8 +239,18 @@
     </div>
   {/if}
 
-  {#each visibleActiveEvents as event (`${event.id}-${event.endsAt}`)}
-    <div class="toast toast--active" role="alert" aria-live="assertive">
+  <!-- Active defense event toasts disabled -->
+  <!-- {#each visibleActiveEvents as event (`${event.id}-${event.endsAt}`)}
+    {@const eventKey = getActiveEventKey(event)}
+    <div
+      class="toast toast--active"
+      role="alert"
+      aria-live="assertive"
+      style="transform: {getSwipeTransform(eventKey)}; opacity: {getSwipeOpacity(eventKey)};"
+      on:touchstart={(e) => handleTouchStart(e, eventKey)}
+      on:touchmove={(e) => handleTouchMove(e, eventKey)}
+      on:touchend={() => handleTouchEnd(eventKey, event)}
+    >
       <div class="toast-header">
         <span class="toast-tag toast-tag--danger">!! DEFENSE EVENT</span>
         <div class="toast-header__actions">
@@ -221,13 +271,21 @@
         <div class="toast-penalty">{getPenaltyLabel(event)}</div>
       {/if}
       {#if showClickHint(event)}
-        <div class="toast-hint">+ Clicking is stronger while this persists.</div>
+        <div class="toast-hint">+ Hyphal absorption taxed — increase manual input</div>
       {/if}
     </div>
-  {/each}
+  {/each} -->
 
   {#if forecastVisible}
-    <div class="toast toast--forecast" role="status" aria-live="polite">
+    <div
+      class="toast toast--forecast"
+      role="status"
+      aria-live="polite"
+      style="transform: {getSwipeTransform('forecast')}; opacity: {getSwipeOpacity('forecast')};"
+      on:touchstart={(e) => handleTouchStart(e, 'forecast')}
+      on:touchmove={(e) => handleTouchMove(e, 'forecast')}
+      on:touchend={() => handleTouchEnd('forecast')}
+    >
       <div class="toast-header">
         <span class="toast-tag toast-tag--forecast">// INCOMING SIGNAL</span>
         <div class="toast-header__actions">
@@ -274,6 +332,9 @@
     font-family: monospace;
     border-radius: 0;
     pointer-events: auto;
+    touch-action: pan-y;
+    user-select: none;
+    will-change: transform, opacity;
   }
 
   .toast--active {

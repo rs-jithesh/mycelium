@@ -470,6 +470,37 @@ export function getGeneratorProduction(state: GameState, generatorId: GeneratorI
   return production.mul(getProductionMultiplier(state, generatorId))
 }
 
+export function getGeneratorProductionPerBuy(state: GameState, generatorId: GeneratorId): Decimal {
+  const definition = getGenDef(generatorId)
+  const owned = state.generators[generatorId].owned
+
+  // Note: disruption is intentionally NOT checked here — the buy-gain label shows what
+  // the next purchase will produce once the disruption clears, not the current blocked output.
+
+  const baseProduction = definition.baseProduction
+  const multiplier = getProductionMultiplier(state, generatorId)
+
+  if (state.strain === 'symbiote') {
+    const totalOwned = generatorDefinitions.reduce(
+      (total, def) => total + state.generators[def.id].owned,
+      0
+    )
+    const currentOthers = Math.max(0, totalOwned - owned)
+    const futureOthers = Math.max(0, totalOwned - owned + 1)
+
+    const currentBonus = 1 + currentOthers * BALANCE.SYMBIOTE_SCALING_PER_OTHER
+    const futureBonus = 1 + futureOthers * BALANCE.SYMBIOTE_SCALING_PER_OTHER
+
+    const strainDef = getStrainDef(state.strain)
+    if (strainDef) {
+      const baseMultiplier = strainDef.passiveModifier
+      return baseProduction.mul(baseMultiplier).mul(multiplier).mul(futureBonus - currentBonus)
+    }
+  }
+
+  return baseProduction.mul(multiplier)
+}
+
 export function calculateBiomassPerSecond(state: GameState): Decimal {
   const total = generatorDefinitions.reduce(
     (total, definition) => total.add(getGeneratorProduction(state, definition.id)),
@@ -526,7 +557,9 @@ export function getBaseClickValue(state: GameState): Decimal {
     ? BALANCE.CLICK_HOST_HEALTH_FRACTION_PARASITE
     : BALANCE.CLICK_HOST_HEALTH_FRACTION_DEFAULT
   const stageIndex = Math.min(state.currentStage - 1, hostHealthFractions.length - 1)
-  const hostHealthFloor = state.hostMaxHealth.mul(hostHealthFractions[stageIndex])
+  const hostHealthFloor = stageIndex === 0
+    ? new Decimal(1)
+    : state.hostMaxHealth.mul(hostHealthFractions[stageIndex])
 
   // Take the higher of BPS-scaled or host-health floor.
   let value = Decimal.max(new Decimal(1), Decimal.max(bpsScaled, hostHealthFloor))

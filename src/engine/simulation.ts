@@ -18,6 +18,11 @@ import {
   advanceStageAction,
   absorb as engineAbsorb,
   checkVisibilityUnlocks,
+  buyGeneratorAction,
+  buyUpgradeAction,
+  purchaseSkillAction,
+  allocateStatAction,
+  chooseStrainAction,
   // Signal economy temporarily disabled.
   // tickSignalSystem,
   // spendSignalCoordinationCommand,
@@ -26,11 +31,16 @@ import {
 } from './happenings'
 import * as formulas from './formulas'
 import { BALANCE } from './balance.config'
-import type { GameState } from '../lib/game'
-import { generatorDefinitions, upgradeDefinitions } from '../lib/game'
+import type { GameState, GeneratorId, SkillId, StatId } from '../lib/game'
+import { generatorDefinitions, skillDefinitions, upgradeDefinitions } from '../lib/game'
 import Decimal from 'break_eternity.js'
 
-declare const process: { argv: string[] }
+declare const process: { argv: string[]; cwd(): string; platform: string }
+
+const dynamicImport = (specifier: string): Promise<any> => (0, eval)(`import(${JSON.stringify(specifier)})`)
+const fs = await dynamicImport('fs')
+const path = await dynamicImport('path')
+const { exec } = await dynamicImport('child_process')
 
 const args = process.argv.slice(2)
 const verbose = args.includes('--verbose')
@@ -38,6 +48,10 @@ const positionalArgs = args.filter((a) => !a.startsWith('--'))
 const DURATION_HOURS = parseFloat(positionalArgs[0] ?? '240')
 const MAX_GAME_SECONDS = DURATION_HOURS * 3600
 const TICK_MS = BALANCE.TICK_MS
+const ACTIVE_PLAY_UNTIL_SECONDS = 12 * 3600
+const CLICK_INTERVALS_MS_BY_STAGE = [3500, 6000, 9000]
+const STAT_PRIORITY: StatId[] = ['virulence', 'virulence', 'complexity', 'virulence', 'resilience', 'complexity', 'virulence', 'resilience', 'complexity']
+const SKILL_PRIORITY: SkillId[] = ['enzymatic-breakdown', 'quorum-recursion', 'chitin-shell', 'acidic-secretion', 'signal-amplification', 'dormancy-protocol', 'hemorrhagic-spread', 'distributed-cognition', 'spore-hardening']
 
 // ── Milestones ──────────────────────────────────────────────────────────
 
@@ -67,6 +81,14 @@ for (let t = 1; t < generatorDefinitions.length; t++) {
 }
 const reached = new Map<string, number>()
 
+interface SimSnapshot {
+  gameSeconds: number
+  bps: number
+  biomass: number
+  stage: number
+  milestone?: string
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 function fmt(seconds: number): string {
@@ -76,6 +98,20 @@ function fmt(seconds: number): string {
   if (d > 0) return `${d}d ${h}h ${m}m`
   if (h > 0) return `${h}h ${m}m`
   return `${m}m`
+}
+
+function formatReadable(value: number): string {
+  if (!Number.isFinite(value)) return '0'
+  if (value >= 100) {
+    return Math.round(value).toLocaleString('en-US')
+  }
+  if (value >= 1) {
+    return value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+  }
+  if (value > 0) {
+    return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+  }
+  return '0'
 }
 
 function genSummary(s: GameState): string {
@@ -128,76 +164,406 @@ function checkMs(state: GameState, gs: number): void {
   }
 }
 
-/**
- * Lightweight bulk-buy: purchases all affordable generators and upgrades
- * without the per-purchase overhead of checkVisibilityUnlocks + recalculateDerivedState.
- * Calls checkVisibilityUnlocks once at the end (cheap), but skips recalculateDerivedState
- * (expensive due to getLevelFromEp) — the caller is responsible for BPS tracking.
- *
- * Returns the updated state plus a flag indicating if any purchases were made.
- */
-function bulkBuy(state: GameState, fakeTime: number): { state: GameState; purchased: boolean } {
-  let s = state
-  let purchased = false
+function recordSnapshot(
+  snapshots: SimSnapshot[],
+  state: GameState,
+  gameSeconds: number,
+  nextSnapshotAtRef: { value: number },
+  intervalSeconds: number,
+  force = false,
+): void {
+  if (force) {
+    snapshots.push({
+      gameSeconds,
+      bps: state.biomassPerSecond.toNumber(),
+      biomass: state.lifetimeBiomass.toNumber(),
+      stage: state.currentStage,
+    })
+    return
+  }
 
-  // Buy upgrades (cheap check, only 3 currently)
-  for (const upg of upgradeDefinitions) {
-    if (s.upgrades[upg.id]) continue
-    if (s.generators[upg.requiredGenerator].owned < upg.requiredOwned) continue
-    if (s.biomass.gte(upg.cost)) {
-      s = {
-        ...s,
-        upgrades: { ...s.upgrades, [upg.id]: true },
-        biomass: Decimal.max(0, s.biomass.sub(upg.cost)),
-      }
-      purchased = true
+  while (gameSeconds >= nextSnapshotAtRef.value) {
+    snapshots.push({
+      gameSeconds,
+      bps: state.biomassPerSecond.toNumber(),
+      biomass: state.lifetimeBiomass.toNumber(),
+      stage: state.currentStage,
+    })
+    nextSnapshotAtRef.value += intervalSeconds
+  }
+}
+
+function generateChartHtml(snapshots: SimSnapshot[]): string {
+  function fmtTime(seconds: number): string {
+    const days = Math.floor(seconds / 86400)
+    const hours = Math.floor((seconds % 86400) / 3600)
+    if (days > 0) return `${days}d ${hours}h`
+    return `${hours}h`
+  }
+
+  function escapeHtml(value: string): string {
+    return value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+  }
+
+  const labels = snapshots.map((s) => fmtTime(s.gameSeconds))
+  const bpsData = snapshots.map((s) => s.bps)
+  const biomassData = snapshots.map((s) => s.biomass)
+  const stageData = snapshots.map((s) => s.stage)
+  const bpsPoints = snapshots.map((s) => ({ x: s.gameSeconds, y: s.bps }))
+  const biomassPoints = snapshots.map((s) => ({ x: s.gameSeconds, y: s.biomass }))
+  const stagePoints = snapshots.map((s) => ({ x: s.gameSeconds, y: s.stage }))
+  const maxStage = Math.max(...stageData, 1)
+
+  const milestoneRows = snapshots
+    .filter((s) => s.milestone)
+    .map((s) => `<tr><td>${fmtTime(s.gameSeconds)}</td><td>${s.stage}</td><td>${escapeHtml(s.milestone ?? '')}</td></tr>`)
+    .join('\n')
+
+  const jumpPoints: Array<{ label: string; magnitude: number }> = []
+  for (let i = 1; i < snapshots.length; i++) {
+    const jump = bpsData[i] - bpsData[i - 1]
+    if (jump >= 2) {
+      jumpPoints.push({
+        label: labels[i],
+        magnitude: Math.round(jump * 10) / 10,
+      })
     }
   }
 
-  // Buy generators — highest visible tier first, buy as many as affordable
-  let anyBought = true
-  let safetyPasses = 0
-  while (anyBought && safetyPasses < 20) {
-    anyBought = false
-    safetyPasses++
-    for (let t = generatorDefinitions.length - 1; t >= 0; t--) {
-      if (!s.visibility.generatorTiers[t]) continue
-      const gen = generatorDefinitions[t]
-      let owned = s.generators[gen.id].owned
-      let biomass = s.biomass
+  const jumpRows = jumpPoints
+    .map((j) => `<tr><td>${j.label}</td><td>+${j.magnitude} OOM</td></tr>`)
+    .join('\n')
 
-      // Calculate how many we can buy (geometric cost: baseCost * 1.18^owned)
-      let count = 0
-      while (true) {
-        const cost = formulas.getGeneratorCostByOwned(gen.id, owned + count)
-        if (biomass.lt(cost)) break
-        biomass = biomass.sub(cost)
-        count++
-        // Safety: don't buy more than 500 in one burst per tier
-        if (count >= 500) break
-      }
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mycelium Protocol - Simulation Output</title>
+<style>
+  body { font-family: monospace; background: #0e0e0e; color: #ccc; margin: 0; padding: 24px; box-sizing: border-box; }
+  h1 { font-size: 14px; color: #3a3; letter-spacing: 0.1em; margin: 0 0 4px; }
+  .subtitle { font-size: 11px; color: #555; margin: 0 0 24px; }
+  .chart-wrap { position: relative; width: 100%; height: 420px; background: #111; border: 1px solid #222; padding: 16px; box-sizing: border-box; margin-bottom: 24px; }
+  .tables { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .table-section h2 { font-size: 11px; color: #555; letter-spacing: 0.08em; margin: 0 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th { text-align: left; color: #444; padding: 4px 8px; border-bottom: 1px solid #222; }
+  td { padding: 4px 8px; border-bottom: 1px solid #1a1a1a; color: #aaa; }
+  .no-jumps { font-size: 11px; color: #2a7a4a; margin-top: 4px; }
+  .legend { display: flex; gap: 20px; margin-bottom: 12px; font-size: 11px; color: #555; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 20px; height: 2px; }
+  @media (max-width: 900px) {
+    .tables { grid-template-columns: 1fr; }
+    .chart-wrap { height: 360px; }
+  }
+</style>
+</head>
+<body>
 
-      if (count > 0) {
-        s = {
-          ...s,
-          biomass,
-          generators: {
-            ...s.generators,
-            [gen.id]: { owned: owned + count },
-          },
+<h1>&gt; MYCELIUM PROTOCOL - SIMULATION OUTPUT</h1>
+<p class="subtitle">Both resource axes use raw values. Snapshots every game-hour in Phase 1 and every analytical step in Phase 2.</p>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#3a3"></div> BPS</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#2a6;border-top:2px dashed #2a6;height:0"></div> Biomass</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#444"></div> Stage</div>
+</div>
+
+<div class="chart-wrap">
+  <canvas id="simChart"></canvas>
+</div>
+
+<div class="tables">
+  <div class="table-section">
+    <h2>// MILESTONES</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Stage</th><th>Event</th></tr></thead>
+      <tbody>${milestoneRows || '<tr><td colspan="3" style="color:#333">No milestones recorded</td></tr>'}</tbody>
+    </table>
+  </div>
+  <div class="table-section">
+    <h2>// BPS JUMPS &gt;= 2 OOM</h2>
+    ${jumpPoints.length === 0
+      ? '<p class="no-jumps">No major BPS jumps detected. Curve looks smooth.</p>'
+      : `<table>
+          <thead><tr><th>Time</th><th>Jump</th></tr></thead>
+          <tbody>${jumpRows}</tbody>
+        </table>`
+    }
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const bpsData = ${JSON.stringify(bpsPoints)};
+const biomassData = ${JSON.stringify(biomassPoints)};
+const stageData = ${JSON.stringify(stagePoints)};
+const maxStage = ${JSON.stringify(maxStage)};
+
+function fmtTime(seconds) {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return days + 'd ' + hours + 'h';
+  return hours + 'h';
+}
+
+new Chart(document.getElementById('simChart'), {
+  type: 'line',
+  data: {
+    datasets: [
+      {
+        label: 'BPS',
+        data: bpsData,
+        borderColor: '#3a3',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        yAxisID: 'yLeft',
+        tension: 0.2,
+      },
+      {
+        label: 'Biomass',
+        data: biomassData,
+        borderColor: '#2a6',
+        backgroundColor: 'transparent',
+        borderWidth: 1,
+        pointRadius: 0,
+        borderDash: [4, 2],
+        yAxisID: 'yRight',
+        tension: 0.2,
+      },
+      {
+        label: 'Stage',
+        data: stageData,
+        borderColor: '#333',
+        backgroundColor: 'transparent',
+        borderWidth: 1,
+        pointRadius: 0,
+        yAxisID: 'yStage',
+        tension: 0,
+        stepped: true,
+      },
+    ],
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#111',
+        borderColor: '#333',
+        borderWidth: 1,
+        titleColor: '#3a3',
+        bodyColor: '#888',
+        titleFont: { family: 'monospace', size: 11 },
+        bodyFont: { family: 'monospace', size: 10 },
+        callbacks: {
+          title: (items) => items.length > 0 ? fmtTime(Number(items[0].parsed.x)) : '',
+          label: (ctx) => {
+            if (ctx.dataset.label === 'Stage') return 'Stage: ' + ctx.parsed.y
+            const val = Number(ctx.parsed.y)
+            return ctx.dataset.label + ': ' + new Intl.NumberFormat('en-US', {
+              minimumFractionDigits: val < 1 ? 2 : 0,
+              maximumFractionDigits: val < 1 ? 4 : 2,
+            }).format(val)
+          }
         }
-        anyBought = true
-        purchased = true
       }
+    },
+    scales: {
+      x: {
+        type: 'linear',
+        ticks: {
+          color: '#444',
+          font: { family: 'monospace', size: 10 },
+          maxTicksLimit: 16,
+          maxRotation: 0,
+          autoSkip: true,
+          callback: (v) => fmtTime(Number(v)),
+        },
+        grid: { color: '#1a1a1a' },
+        title: {
+          display: true,
+          text: 'game time',
+          color: '#444',
+          font: { family: 'monospace', size: 10 },
+        },
+      },
+      yLeft: {
+        type: 'linear',
+        position: 'left',
+        ticks: {
+          color: '#444',
+          font: { family: 'monospace', size: 10 },
+          callback: (v) => String(Math.round(Number(v))),
+        },
+        grid: { color: '#1a1a1a' },
+        title: {
+          display: true,
+          text: 'BPS',
+          color: '#444',
+          font: { family: 'monospace', size: 10 },
+        },
+      },
+      yRight: {
+        type: 'linear',
+        position: 'right',
+        ticks: {
+          color: '#4a7',
+          font: { family: 'monospace', size: 10 },
+          callback: (v) => String(Math.round(Number(v))),
+        },
+        grid: { display: false },
+        title: {
+          display: true,
+          text: 'Biomass',
+          color: '#4a7',
+          font: { family: 'monospace', size: 10 },
+        },
+      },
+      yStage: {
+        type: 'linear',
+        position: 'right',
+        offset: true,
+        min: 1,
+        max: maxStage,
+        ticks: {
+          color: '#333',
+          font: { family: 'monospace', size: 10 },
+          stepSize: 1,
+          callback: (v) => 'S' + v,
+        },
+        grid: { display: false },
+      },
+    },
+  },
+});
+</script>
+</body>
+</html>`
+}
+
+function getActiveClickIntervalMs(state: GameState, gameSeconds: number): number | null {
+  if (gameSeconds > ACTIVE_PLAY_UNTIL_SECONDS) return null
+  const stageIndex = state.currentStage - 1
+  if (stageIndex < 0 || stageIndex >= CLICK_INTERVALS_MS_BY_STAGE.length) return null
+  if (state.strain === 'symbiote') return null
+  return CLICK_INTERVALS_MS_BY_STAGE[stageIndex]
+}
+
+function getSimulatedManualBps(state: GameState, gameSeconds: number): number {
+  const intervalMs = getActiveClickIntervalMs(state, gameSeconds)
+  if (!intervalMs) return 0
+  return state.biomassPerClick.toNumber() * (1000 / intervalMs)
+}
+
+function chooseGeneratorPurchase(state: GameState): GeneratorId | null {
+  const reserve = Decimal.max(state.biomassPerClick.mul(8), state.biomassPerSecond.mul(45))
+
+  const affordable = generatorDefinitions
+    .filter((gen, index) => state.visibility.generatorTiers[index])
+    .map((gen) => ({
+      gen,
+      cost: formulas.getGeneratorCostByOwned(gen.id, state.generators[gen.id].owned),
+    }))
+    .filter(({ cost }) => state.biomass.gte(cost) && state.biomass.sub(cost).gte(reserve))
+
+  if (affordable.length === 0) {
+    const firstCost = formulas.getGeneratorCostByOwned('hyphae-strand', state.generators['hyphae-strand'].owned)
+    return state.biomass.gte(firstCost) ? 'hyphae-strand' : null
+  }
+
+  let best = affordable[0]
+  let bestScore = best.gen.baseProduction.toNumber() / Math.max(1, best.cost.toNumber())
+  for (const candidate of affordable) {
+    const score = candidate.gen.baseProduction.toNumber() / Math.max(1, candidate.cost.toNumber())
+    if (score > bestScore) {
+      best = candidate
+      bestScore = score
     }
   }
 
-  // Visibility check is cheap (0ms), recalculate BPS for visibility decisions
-  s = {
-    ...s,
-    biomassPerSecond: formulas.calculateBiomassPerSecond(s),
+  for (let i = affordable.length - 1; i >= 0; i--) {
+    const candidate = affordable[i]
+    const score = candidate.gen.baseProduction.toNumber() / Math.max(1, candidate.cost.toNumber())
+    if (score >= bestScore * 0.65) {
+      return candidate.gen.id
+    }
   }
-  s = checkVisibilityUnlocks(s, fakeTime)
+
+  return best.gen.id
+}
+
+function simulatePlayerChoices(state: GameState, fakeTime: number): { state: GameState; purchased: boolean } {
+  let s = checkVisibilityUnlocks(state, fakeTime)
+  let purchased = false
+  let progressed = true
+  let safety = 0
+
+  while (progressed && safety < 200) {
+    progressed = false
+    safety++
+
+    if (formulas.getCompletedHosts(s) >= 1 && s.strain === null) {
+      const next = chooseStrainAction(s, 'parasite')
+      if (next !== s) {
+        s = next
+        purchased = true
+        progressed = true
+        continue
+      }
+    }
+
+    while (s.mutationPoints > 0) {
+      const spent = formulas.getSpentMutationPoints(s.stats)
+      const statId = STAT_PRIORITY[spent] ?? 'complexity'
+      const next = allocateStatAction(s, statId)
+      if (next === s) break
+      s = next
+      purchased = true
+      progressed = true
+    }
+    if (progressed) continue
+
+    for (const skillId of SKILL_PRIORITY) {
+      const next = purchaseSkillAction(s, skillId)
+      if (next !== s) {
+        s = next
+        purchased = true
+        progressed = true
+        break
+      }
+    }
+    if (progressed) continue
+
+    for (const upg of upgradeDefinitions) {
+      const next = buyUpgradeAction(s, upg.id)
+      if (next !== s) {
+        s = next
+        purchased = true
+        progressed = true
+        break
+      }
+    }
+    if (progressed) continue
+
+    const generatorId = chooseGeneratorPurchase(s)
+    if (!generatorId) break
+    const next = buyGeneratorAction(s, generatorId)
+    if (next === s) break
+    s = next
+    purchased = true
+    progressed = true
+  }
 
   return { state: s, purchased }
 }
@@ -205,13 +571,29 @@ function bulkBuy(state: GameState, fakeTime: number): { state: GameState; purcha
 // ── Phase 1: Tick-by-tick engine run (up to the switchover point) ───────
 
 /** Run the real engine tick-by-tick for precise early-game timing. */
-function runTickPhase(state: GameState, fakeTime: number, gameSeconds: number, maxSeconds: number): { state: GameState; fakeTime: number; gameSeconds: number } {
+function runTickPhase(
+  state: GameState,
+  fakeTime: number,
+  gameSeconds: number,
+  maxSeconds: number,
+  snapshots: SimSnapshot[],
+  nextSnapshotAtRef: { value: number },
+  snapshotIntervalSeconds: number,
+): { state: GameState; fakeTime: number; gameSeconds: number } {
   const maxTicks = Math.floor((maxSeconds - gameSeconds) * 1000 / TICK_MS)
   let lastMinute = -1
+  let nextAutoClickAt = fakeTime
 
   for (let i = 0; i < maxTicks; i++) {
     fakeTime += TICK_MS
     gameSeconds += TICK_MS / 1000
+
+    let clickIntervalMs = getActiveClickIntervalMs(state, gameSeconds)
+    while (clickIntervalMs !== null && fakeTime >= nextAutoClickAt) {
+      state = engineAbsorb(state)
+      nextAutoClickAt += clickIntervalMs
+      clickIntervalMs = getActiveClickIntervalMs(state, gameSeconds)
+    }
 
     state = tick(state, fakeTime)
     state = suppressDefense(state, fakeTime)
@@ -221,13 +603,13 @@ function runTickPhase(state: GameState, fakeTime: number, gameSeconds: number, m
       const cm = Math.floor(gameSeconds / 60)
       if (cm !== lastMinute) {
         lastMinute = cm
-        console.log(`${fmt(gameSeconds).padStart(15)} |   S${state.currentStage} BPS=${state.biomassPerSecond.toExponential(2)} HP=${state.hostHealth.toExponential(2)} | ${genSummary(state)}`)
+        console.log(`${fmt(gameSeconds).padStart(15)} |   S${state.currentStage} BPS=${formatReadable(state.biomassPerSecond.toNumber())} HP=${formatReadable(state.hostHealth.toNumber())} | ${genSummary(state)}`)
       }
     }
 
-    // AI: buy all affordable upgrades + generators in one batch
-    ;({ state } = bulkBuy(state, fakeTime))
+    ;({ state } = simulatePlayerChoices(state, fakeTime))
     checkMs(state, gameSeconds)
+    recordSnapshot(snapshots, state, gameSeconds, nextSnapshotAtRef, snapshotIntervalSeconds)
 
     // Auto-advance
     if (state.hostCompleted && formulas.hasNextStage(state)) {
@@ -238,8 +620,7 @@ function runTickPhase(state: GameState, fakeTime: number, gameSeconds: number, m
 
     if (reached.size === milestones.length) break
 
-    // Switch to analytical phase once Stage 1 is cleared (engine too slow for later stages)
-    if (state.currentStage >= 2) break
+    if (gameSeconds >= ACTIVE_PLAY_UNTIL_SECONDS) break
   }
 
   return { state, fakeTime, gameSeconds }
@@ -252,20 +633,25 @@ function runTickPhase(state: GameState, fakeTime: number, gameSeconds: number, m
  * We analytically compute time to deplete host health, buy generators, and
  * unlock new tiers without running the expensive per-tick engine.
  */
-function runAnalyticalPhase(state: GameState, fakeTime: number, gameSeconds: number): { state: GameState; fakeTime: number; gameSeconds: number } {
+function runAnalyticalPhase(
+  state: GameState,
+  fakeTime: number,
+  gameSeconds: number,
+  snapshots: SimSnapshot[],
+  nextSnapshotAtRef: { value: number },
+  snapshotIntervalSeconds: number,
+): { state: GameState; fakeTime: number; gameSeconds: number } {
 
   const MAX_ITER = 200_000
   let lastLoggedMinute = -1
 
   for (let iter = 0; iter < MAX_ITER && gameSeconds < MAX_GAME_SECONDS; iter++) {
-    // Buy everything affordable first
-    ;({ state } = bulkBuy(state, fakeTime))
+    ;({ state } = simulatePlayerChoices(state, fakeTime))
 
     // Auto-advance stage
     if (state.hostCompleted && formulas.hasNextStage(state)) {
       state = advanceStageAction(state)
-      // After advancing, bulkBuy again (new tiers may unlock)
-      ;({ state } = bulkBuy(state, fakeTime))
+      ;({ state } = simulatePlayerChoices(state, fakeTime))
     }
 
     checkMs(state, gameSeconds)
@@ -273,7 +659,8 @@ function runAnalyticalPhase(state: GameState, fakeTime: number, gameSeconds: num
 
     // Compute BPS for time jumps
     const bps = formulas.calculateBiomassPerSecond(state)
-    if (bps.lte(0)) break
+    const effectiveBps = bps.add(getSimulatedManualBps(state, gameSeconds))
+    if (effectiveBps.lte(0)) break
 
     // ── Determine time to next meaningful event ──
 
@@ -281,34 +668,23 @@ function runAnalyticalPhase(state: GameState, fakeTime: number, gameSeconds: num
 
     // 1) Time until host depletes — this is always the hard upper bound
     if (!state.hostCompleted && state.hostHealth.gt(0)) {
-      const s = state.hostHealth.div(bps).toNumber()
+      const s = state.hostHealth.div(effectiveBps).toNumber()
       if (s > 0 && s < jumpSeconds) jumpSeconds = s
     }
 
-    // 2) Time to buy the next highest-tier generator.
-    //    If it's very short (< 60s), jump 60s instead to batch many purchases.
-    let highestVisibleTier = -1
-    for (let t = generatorDefinitions.length - 1; t >= 0; t--) {
-      if (state.visibility.generatorTiers[t]) { highestVisibleTier = t; break }
-    }
-    if (highestVisibleTier >= 0) {
-      const gen = generatorDefinitions[highestVisibleTier]
-      const cost = formulas.getGeneratorCostByOwned(gen.id, state.generators[gen.id].owned)
+    const nextGeneratorId = chooseGeneratorPurchase(state)
+    if (nextGeneratorId) {
+      const cost = formulas.getGeneratorCostByOwned(nextGeneratorId, state.generators[nextGeneratorId].owned)
       const deficit = cost.sub(state.biomass)
       if (deficit.gt(0)) {
-        const s = deficit.div(bps).toNumber()
-        if (s > 0) {
-          // If next purchase is < 300s away, batch: jump at least 300s so bulkBuy
-          // handles many purchases at once instead of one per iteration.
-          const batchedJump = Math.max(s, 300)
-          if (batchedJump < jumpSeconds) jumpSeconds = batchedJump
-        }
+        const s = deficit.div(effectiveBps).toNumber()
+        if (s > 0 && s < jumpSeconds) jumpSeconds = s
       }
     }
 
     // Clamp the jump to at most 1/4 of remaining host time for responsiveness.
     if (!state.hostCompleted && state.hostHealth.gt(0)) {
-      const hostTimeRemaining = state.hostHealth.div(bps).toNumber()
+      const hostTimeRemaining = state.hostHealth.div(effectiveBps).toNumber()
       const quarterTime = hostTimeRemaining / 4
       if (quarterTime > 1 && quarterTime < jumpSeconds) {
         jumpSeconds = quarterTime
@@ -321,7 +697,19 @@ function runAnalyticalPhase(state: GameState, fakeTime: number, gameSeconds: num
       if (state.generators[upg.requiredGenerator].owned < upg.requiredOwned) continue
       const deficit = upg.cost.sub(state.biomass)
       if (deficit.gt(0)) {
-        const s = deficit.div(bps).toNumber()
+        const s = deficit.div(effectiveBps).toNumber()
+        if (s > 0 && s < jumpSeconds) jumpSeconds = s
+      }
+    }
+
+    for (const skillId of SKILL_PRIORITY) {
+      if (state.unlockedSkills.includes(skillId)) continue
+      const def = skillDefinitions.find((entry) => entry.id === skillId)
+      if (!def) continue
+      if (state.currentStage < 3 || state.stats[def.branch] < def.requiredStat) continue
+      const deficit = def.cost.sub(state.biomass)
+      if (deficit.gt(0)) {
+        const s = deficit.div(effectiveBps).toNumber()
         if (s > 0 && s < jumpSeconds) jumpSeconds = s
       }
     }
@@ -336,6 +724,13 @@ function runAnalyticalPhase(state: GameState, fakeTime: number, gameSeconds: num
       checkMs(state, gameSeconds)
       const chunk = Math.min(30, remainingJump)
       state = advanceAnalyticalChunk(state, chunk)
+      const clickIntervalMs = getActiveClickIntervalMs(state, gameSeconds)
+      if (clickIntervalMs !== null) {
+        const simulatedClicks = Math.floor((chunk * 1000) / clickIntervalMs)
+        for (let i = 0; i < simulatedClicks; i++) {
+          state = engineAbsorb(state)
+        }
+      }
       fakeTime += chunk * 1000
       gameSeconds += chunk
       remainingJump -= chunk
@@ -346,6 +741,8 @@ function runAnalyticalPhase(state: GameState, fakeTime: number, gameSeconds: num
       }
     }
 
+    recordSnapshot(snapshots, state, gameSeconds, nextSnapshotAtRef, snapshotIntervalSeconds, true)
+
     state = suppressDefense(state, fakeTime)
 
     // Verbose logging
@@ -353,7 +750,7 @@ function runAnalyticalPhase(state: GameState, fakeTime: number, gameSeconds: num
       const cm = Math.floor(gameSeconds / 60)
       if (cm !== lastLoggedMinute) {
         lastLoggedMinute = cm
-        console.log(`${fmt(gameSeconds).padStart(15)} |   S${state.currentStage} BPS=${state.biomassPerSecond.toExponential(2)} HP=${state.hostHealth.toExponential(2)} | ${genSummary(state)}`)
+        console.log(`${fmt(gameSeconds).padStart(15)} |   S${state.currentStage} BPS=${formatReadable(state.biomassPerSecond.toNumber())} HP=${formatReadable(state.hostHealth.toNumber())} | ${genSummary(state)}`)
       }
     }
   }
@@ -371,23 +768,43 @@ console.log('\u2500'.repeat(70))
 let state = createFreshState()
 let fakeTime = Date.now()
 let gameSeconds = 0
+const snapshots: SimSnapshot[] = []
+const SNAPSHOT_INTERVAL_SECONDS = 3600
+const nextSnapshotAtRef = { value: 0 }
 
 state = suppressDefense(state, fakeTime)
-for (let i = 0; i < 20; i++) state = engineAbsorb(state)
+recordSnapshot(snapshots, state, gameSeconds, nextSnapshotAtRef, SNAPSHOT_INTERVAL_SECONDS)
 
 const startWall = Date.now()
 
 // Phase 1: Tick-by-tick until Stage 1 clears (precise early-game timing)
 console.log(`${fmt(0).padStart(15)} | [Phase 1: tick-by-tick through Stage 1]`)
-;({ state, fakeTime, gameSeconds } = runTickPhase(state, fakeTime, gameSeconds, MAX_GAME_SECONDS))
+;({ state, fakeTime, gameSeconds } = runTickPhase(
+  state,
+  fakeTime,
+  gameSeconds,
+  MAX_GAME_SECONDS,
+  snapshots,
+  nextSnapshotAtRef,
+  SNAPSHOT_INTERVAL_SECONDS,
+))
 
 // Phase 2: Analytical fast-forward for the remaining duration
 if (gameSeconds < MAX_GAME_SECONDS && reached.size < milestones.length) {
   console.log(`${fmt(gameSeconds).padStart(15)} | [Phase 2: analytical fast-forward to ${fmt(MAX_GAME_SECONDS)}]`)
-  ;({ state, fakeTime, gameSeconds } = runAnalyticalPhase(state, fakeTime, gameSeconds))
+  ;({ state, fakeTime, gameSeconds } = runAnalyticalPhase(
+    state,
+    fakeTime,
+    gameSeconds,
+    snapshots,
+    nextSnapshotAtRef,
+    SNAPSHOT_INTERVAL_SECONDS,
+  ))
 }
 
 const elapsedWall = ((Date.now() - startWall) / 1000).toFixed(1)
+const peakBps = snapshots.reduce((max, snapshot) => Math.max(max, snapshot.bps), 0)
+const maxBiomass = snapshots.reduce((max, snapshot) => Math.max(max, snapshot.biomass), 0)
 
 // ── Summary ─────────────────────────────────────────────────────────────
 
@@ -397,7 +814,9 @@ console.log(`Simulation complete in ${elapsedWall}s wall time.\n`)
 console.log('Final state:')
 console.log(`  Stage: ${state.currentStage}${state.hostCompleted ? ' (completed)' : ''}`)
 console.log(`  Hosts:  ${formulas.getCompletedHosts(state)}`)
-console.log(`  BPS:   ${state.biomassPerSecond.toExponential(3)}`)
+console.log(`  BPS:   ${formatReadable(state.biomassPerSecond.toNumber())}`)
+console.log(`  Peak BPS: ${formatReadable(peakBps)}`)
+console.log(`  Max biomass: ${formatReadable(maxBiomass)}`)
 // Signal economy temporarily disabled.
 // console.log(`  Signal: ${state.signal.toFixed(1)} / ${formulas.getSignalCap(state).toFixed(0)} | SPS: ${formulas.getSignalPerSecond(state).toFixed(2)}`)
 console.log(`  Generators: ${genSummary(state)}`)
@@ -428,3 +847,40 @@ if (tierUnlocks.length > 0) {
     console.log(`  ${fmt(sec).padStart(11)} | ${label}`)
   }
 }
+
+recordSnapshot(snapshots, state, gameSeconds, nextSnapshotAtRef, SNAPSHOT_INTERVAL_SECONDS, true)
+
+const finalizedMilestones = [...reached.entries()]
+  .map(([label, gameSeconds]) => ({ label, gameSeconds }))
+  .sort((a, b) => a.gameSeconds - b.gameSeconds)
+
+for (const milestone of finalizedMilestones) {
+  let closest: SimSnapshot | undefined
+  let closestDiff = Number.POSITIVE_INFINITY
+  for (const snapshot of snapshots) {
+    const diff = Math.abs(snapshot.gameSeconds - milestone.gameSeconds)
+    if (diff < closestDiff) {
+      closestDiff = diff
+      closest = snapshot
+    }
+  }
+  if (closest) {
+    closest.milestone = closest.milestone
+      ? `${closest.milestone}; ${milestone.label}`
+      : milestone.label
+  }
+}
+
+const html = generateChartHtml(snapshots)
+const outputPath = path.resolve(process.cwd(), 'simulation-output.html')
+fs.writeFileSync(outputPath, html, 'utf-8')
+console.log(`\n> Chart written: ${outputPath}`)
+
+const openCommand =
+  process.platform === 'win32' ? `start "" "${outputPath}"` :
+  process.platform === 'darwin' ? `open "${outputPath}"` :
+  `xdg-open "${outputPath}"`
+
+exec(openCommand, (err: unknown) => {
+  if (err) console.log('> Could not open browser automatically. Open the file manually.')
+})

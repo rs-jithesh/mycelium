@@ -227,6 +227,8 @@ export interface GameState {
   _currentHostDefenseEventsSurvived: number
   _offlineEvents: OfflineEvent[]
   _pendingOfflineEvents: OfflineEvent[]
+  hostCorruptionPercent: number
+  manifestationQueue: string[]
 }
 
 // ============================================================================

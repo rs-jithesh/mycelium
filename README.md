@@ -36,13 +36,45 @@ npm run check
 
 ## Gameplay
 
+### Scale Philosophy
+
+Mycelium Protocol operates on **fungal scale** with readable compounding growth:
+
+- **Readable numbers**: Biomass counts in ones, tens, thousands, millions
+- **Readable BPS**: Passive output ranges from 0.01 to ~200,000 by endgame
+- **No scientific notation**: Standard notation stays readable throughout the run
+- **Meaningful decisions**: Every generator purchase matters and each new tier feels explosive
+- **Week-long arc**: Full completion still aims for roughly 7 days
+
 ### Core Loop
 
-1. **Absorb** -- Click to generate biomass (primary currency)
-2. **Buy Generators** -- Spend biomass on 8 tiers of passive producers (Hyphae Strand through Planetary Membrane)
-3. **Advance Hosts** -- Consume hosts across 8 stages (Dead Leaf through The Biosphere), each with escalating health pools
+1. **Absorb** -- Click to generate biomass (10-50 biomass per click early)
+2. **Buy Generators** -- Spend biomass on 8 tiers of passive producers with compounding efficiency jumps (6x-17x)
+3. **Advance Hosts** -- Consume hosts across 8 stages
+   - Stage 1 (Dead Leaf): ~1 hour
+   - Stage 2 (Fallen Log): ~2-3 hours
+   - Stage 3 (Rotting Stump): ~6-8 hours
+   - Stage 4 (Tree Trunk): ~1 day
+   - Stage 5 (Forest Floor): ~2 days
+   - Stage 6 (Root Network): ~4 days
+   - Stage 7 (The Grove): ~6 days
+   - Stage 8 (The Biosphere): ~7 days
 4. **Allocate Stats** -- Earn stat points on host advancement and distribute them across Virulence, Resilience, and Complexity
 5. **Prestige** -- Trigger a "Spore Release" to reset your run in exchange for a Genetic Memory multiplier
+
+## Balance Philosophy
+
+The Mycelium Protocol is designed as a **slow-burn incremental** experience with real compounding payoffs:
+
+- **First Hour**: Players should feel meaningful progress without immediately exhausting Stage 1
+- **First Day**: Stages 1-4 should deliver multiple unlock spikes and noticeable efficiency cliffs
+- **First Week**: Full completion to Stage 8 should still land around 7 days of active/idle play
+- **Prestige Layer**: Run 2+ introduces the Signal economy and earlier Genetic Memory relevance
+
+Key tuning decisions:
+- Generator cost exponent is low enough to allow meaningful bulk-buy acceleration without trivializing costs
+- Tier unlocks create 10x-50x efficiency cliffs that feel rewarding
+- Click values stay relevant early and during pressure spikes without replacing generator progression
 
 ### Strains
 

@@ -73,8 +73,8 @@ function canBuyUpgrade(idx: number, s: SimState): boolean {
 function freshState(): SimState {
   return {
     owned: new Array(NUM_TIERS).fill(0),
-    biomass: 20,
-    totalBiomass: 20,
+    biomass: 5,
+    totalBiomass: 5,
     bps: 0,
     time: 0,
     upgrades: [false, false, false],
@@ -146,25 +146,26 @@ function simUntil(state: SimState, targetTime: number, maxEvents = 2_000_000): n
 
 function runDeriveMode() {
   // Fixed values
-  const STAGE_1_HEALTH = 1000  // Keep tutorial stage simple
+  const STAGE_1_HEALTH = 600
 
   // Target clear times (cumulative from game start)
   const TARGET_TIMES = [
-    12.7 * 60,    // Stage 1: ~12.7 min (Tier 1 only)
-    90 * 60,      // Stage 2: 90 min    (Tier 5 unlocks after)
-    4 * 3600,     // Stage 3: 4h
-    10 * 3600,    // Stage 4: 10h       (Tier 6 unlocks after)
-    24 * 3600,    // Stage 5: 24h
-    48 * 3600,    // Stage 6: 48h       (Tier 7 unlocks after)
-    96 * 3600,    // Stage 7: 96h       (Tier 8 unlocks after)
-    168 * 3600,   // Stage 8: 168h (7 days)
+    45 * 60,
+    4 * 3600,
+    8 * 3600,
+    24 * 3600,
+    48 * 3600,
+    72 * 3600,
+    120 * 3600,
+    144 * 3600,
+    168 * 3600,
   ]
 
   const state = freshState()
   const derivedHealth: number[] = []
   let cumulativeHealth = 0
 
-  console.log('\n=== DERIVING HOST_HEALTH (Stage 1 fixed at 1000) ===\n')
+  console.log('\n=== DERIVING HOST_HEALTH (Stage 1 fixed at 600) ===\n')
   console.log('Stage gates: Tier 5->S2, Tier 6->S4, Tier 7->S6, Tier 8->S7\n')
 
   for (let stage = 0; stage < 8; stage++) {
