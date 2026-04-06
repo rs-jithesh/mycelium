@@ -115,6 +115,21 @@ export const wikiEntries: WikiEntry[] = [
     ],
   },
   {
+    id: 'ecological-threats',
+    type: 'article',
+    section: 'growth',
+    title: 'Ecological Threats',
+    summary: 'Wildlife and ecosystem responses can trigger PvE encounters that resolve immediately when engaged.',
+    keywords: ['pve', 'enemy', 'bestiary', 'debuff', 'encounter'],
+    content: [
+      'Ecological threats are separate from host defense events. They represent animals, grazers, burrowers, and larger ecosystem responses attacking the colony directly.',
+      'Only one enemy encounter can be active at a time. When detected, it appears in the terminal and can be engaged into a short live combat sequence.',
+      'Combat uses your current Virulence, Resilience, Complexity, strain, unlocked skills, host echoes, and equipped countermeasure. You do not choose a second combat loadout.',
+      'Winning grants biomass, bestiary progress, and occasional drops. Poor outcomes can leave temporary debuffs that reduce passive output, click output, or shorten the next enemy spawn timer.',
+      'Bestiary knowledge persists across Spore Release in the current implementation, while active encounters and debuffs do not.',
+    ],
+  },
+  {
     id: 'strains-and-stats',
     type: 'article',
     section: 'evolution',
@@ -225,6 +240,15 @@ export const wikiEntries: WikiEntry[] = [
     summary: 'A host defense event probably triggered.',
     keywords: ['production', 'drop', 'drought', 'beetle'],
     content: ['The most common cause is a host defense event like Drought or Beetle Disruption. Check the host analysis panel and the log.'],
+  },
+  {
+    id: 'faq-enemy-threat',
+    type: 'faq',
+    section: 'faq',
+    title: 'Why is there an ecological threat warning?',
+    summary: 'A PvE encounter has spawned and is waiting to be resolved.',
+    keywords: ['pve', 'enemy warning', 'ecological threat'],
+    content: ['An ecological threat means a wildlife encounter has spawned near the colony. Open the threat panel or overlay, check the countermeasure matchup, and engage it to resolve the encounter immediately.'],
   },
   {
     id: 'faq-host-complete',

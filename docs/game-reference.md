@@ -87,6 +87,18 @@ export interface GameState {
   lastSaveTime: number
   lastTickTime: number
   log: string[]
+  activeEnemyEncounter: ActiveEnemyEncounter | null
+  knownEnemies: string[]
+  enemyEncounterCounts: Record<string, number>
+  enemyVictoryCounts: Record<string, number>
+  enemyDefeatCounts: Record<string, number>
+  totalEnemiesDefeated: number
+  totalEnemiesFailed: number
+  activeEnemyDebuffs: ActiveEnemyDebuff[]
+  nextEnemyCheckAt: number
+  pendingEnemyNotification: string | null
+  forcedEnemyId: string | null
+  lastEnemyCombatResult: CombatResult | null
   visibility: VisibilityState
 }
 ```
@@ -573,6 +585,30 @@ if (expiredEvents.length > 0 && state.strain === 'saprophyte' && state.biomassPe
 
 Saprophyte recovery is bounded by actual production lost: it computes `BPS × penaltyDepth × eventDurationSeconds × STRAIN_SAPROPHYTE_DEFENSE_RECOVERY_FRACTION`. The old `STRAIN_SAPROPHYTE_DEFENSE_RECOVERY_SECONDS` constant has been removed.
 
+## 8.5. Ecological Threats
+
+The game now includes a lightweight PvE layer that models wildlife and ecosystem resistance separately from host defense events.
+
+Key properties of the implementation:
+
+- one active enemy encounter at a time
+- immediate resolution when engaged
+- no second countermeasure loadout
+- bestiary discovery and encounter counts persist through prestige
+- active encounter, temporary debuffs, and last-result cache reset with stage advance and prestige
+
+Combat uses current build state:
+
+- Virulence
+- Resilience
+- Complexity
+- current strain
+- unlocked skills
+- host echoes
+- equipped countermeasure matchup against the enemy
+
+Possible outcomes are `perfect`, `victory`, `pyrrhic`, and `defeat`. Poor outcomes can apply temporary debuffs to passive output, click output, or future enemy-check timing.
+
 ## 9. Unlock and Visibility Logic
 
 The game uses progressive reveal logic inside `checkVisibilityUnlocks(...)`.
@@ -643,6 +679,7 @@ The main user-facing actions are:
 - choose strain
 - advance stage
 - equip countermeasure
+- engage enemy
 - release spores
 
 Representative excerpts:
@@ -688,6 +725,7 @@ Important behavior:
 3. older visibility arrays are padded to expected tier count
 4. offline gains are applied after load
 5. save corruption falls back to a fresh run with log messages
+6. PvE state is explicitly serialized and restored alongside the base run state
 
 Representative serialization excerpt:
 
@@ -754,6 +792,7 @@ The store also handles:
 - periodic autosave
 - visibility-change offline gain handling
 - reset/debug state replacement
+- thin wrappers for PvE engagement and dev-only PvE actions
 
 ## 13. UI Structure
 
@@ -772,6 +811,7 @@ Contains:
 - absorb button
 - host analysis panel
 - defense control panel
+- ecological threat panel and encounter overlay
 - generator modules panel
 - upgrades list
 
@@ -937,6 +977,7 @@ Stages 2 and 3 always fire in the same simulation tick. This is a structural art
 6. Prestige is host-based, not level-based.
 7. Mutation points are host-completion based in the current design.
 8. Signal is a prestige-layer feature. Run 1 has zero Signal presence. From run 2 onward, Signal is live but spend actions are not yet fully exposed in the UI. Distinguish between the active tick/production layer and the dormant spend scaffolding.
+9. PvE uses the same immutable state and explicit save/load rules as the rest of the engine. New PvE fields must be added to serialization or they will be lost.
 
 ## 19. Representative Module Roles
 
@@ -958,7 +999,11 @@ Purpose: pure math, progression formulas, formatting helpers.
 
 ### `happenings.ts`
 
-Purpose: state transitions, ticks, purchases, unlocks, defense events, prestige, save/load.
+Purpose: state transitions, ticks, purchases, unlocks, defense events, PvE integration, prestige, save/load.
+
+### `src/engine/pve/*`
+
+Purpose: pure enemy definitions, spawn rules, and encounter resolution.
 
 ### `gameStore.ts`
 
@@ -993,10 +1038,11 @@ export function tick(state: GameState, now = Date.now()): GameState {
     perTick
   )
 
-  next = tickSignalSystem(next, deltaMs)
-  next = tickDefenseResponseState(next, deltaMs)
+   next = tickSignalSystem(next, deltaMs)
+   next = tickDefenseResponseState(next, deltaMs)
+   next = tickEnemyDebuffs(next, deltaMs)
 
-  return checkVisibilityUnlocks(next, now)
+   return checkVisibilityUnlocks(next, now)
 }
 ```
 
@@ -1043,6 +1089,7 @@ The game currently consists of:
 - mutation stats and branch-based skills
 - stage-based host progression
 - a defense and countermeasure subsystem
+- an ecological threat subsystem with bestiary persistence and temporary debuffs
 - prestige via Spore Release and Genetic Memory
 - a headless simulation runner for tuning
 - a Signal economy active from prestige run 2 onward, with spend actions scaffolded for future player-facing exposure

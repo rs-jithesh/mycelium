@@ -1,5 +1,6 @@
 import Decimal from 'break_eternity.js'
 import { BALANCE } from '../engine/balance.config'
+import type { ActiveEnemyCombat, ActiveEnemyDebuff, ActiveEnemyEncounter, CombatResult } from '../engine/pve/enemy.types'
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -48,7 +49,13 @@ export type DefenseEventId =
   | 'spore-predation'
   | 'thermal-stratification'
   | 'ecosystem-feedback'
-export type CountermeasureId = 'moisture-buffer' | 'brood-decoy' | 'immune-mimicry'
+export type CountermeasureId =
+  | 'moisture-buffer'        // Hydric stress events
+  | 'chitin-lattice'         // Physical/structural disruption events
+  | 'enzyme-suppressor'      // Chemical/biological attack events
+  | 'thermal-regulator'      // Temperature and radiation events
+  | 'signal-jammer'          // Ecosystem-level and competitive events
+  | 'spore-shield'           // Predation and reproductive threat events
 export type HostEchoType = 'aggressive' | 'efficient' | 'resilient' | 'patient'
 
 export interface HostEchoDefinition {
@@ -139,7 +146,10 @@ export interface CountermeasureDefinition {
   id: CountermeasureId
   name: string
   description: string
-  targetEventIds: DefenseEventId[]
+  flavorLine: string          // One-line terminal flavor shown in UI when active
+  targetEventIds: DefenseEventId[]        // Full mitigation — correct protocol
+  partialEventIds: DefenseEventId[]       // Partial mitigation — adjacent protocol
+  uiAccentColor: string       // CSS hex used for subtle UI tinting when active
 }
 
 export interface ActiveCoordinationLink {
@@ -193,6 +203,7 @@ export interface GameState {
   hostName: string
   stageLabel: string
   subtitle: string
+  hostFlavor: string
   hostHealth: Decimal
   hostMaxHealth: Decimal
   hostCompleted: boolean
@@ -207,6 +218,7 @@ export interface GameState {
   buyAmount: BuyAmount
   activeDefenseEvents: ActiveDefenseEvent[]
   nextDefenseEventId: DefenseEventId | null
+  lastDefenseEventId: DefenseEventId | null
   equippedCountermeasure: CountermeasureId | null
   activeParasiteDefenseBurstMs: number
   activeCoordinationLinks: ActiveCoordinationLink[]
@@ -229,6 +241,19 @@ export interface GameState {
   _pendingOfflineEvents: OfflineEvent[]
   hostCorruptionPercent: number
   manifestationQueue: string[]
+  activeEnemyEncounter: ActiveEnemyEncounter | null
+  knownEnemies: string[]
+  enemyEncounterCounts: Record<string, number>
+  enemyVictoryCounts: Record<string, number>
+  enemyDefeatCounts: Record<string, number>
+  totalEnemiesDefeated: number
+  totalEnemiesFailed: number
+  activeEnemyDebuffs: ActiveEnemyDebuff[]
+  activeEnemyCombat: ActiveEnemyCombat | null
+  nextEnemyCheckAt: number
+  pendingEnemyNotification: string | null
+  forcedEnemyId: string | null
+  lastEnemyCombatResult: CombatResult | null
 }
 
 // ============================================================================
@@ -381,20 +406,56 @@ export const countermeasureDefinitions: CountermeasureDefinition[] = [
   {
     id: 'moisture-buffer',
     name: 'Moisture Buffer',
-    description: 'Reduces Drought severity and stabilises dry-host collapse windows.',
-    targetEventIds: ['drought'],
+    description: 'Full mitigation: Drought, Desiccation Pulse. Partial: Cold Snap, Antifungal Exudates.',
+    flavorLine: 'Hydric reserves pressurized. Network humidity stabilized.',
+    targetEventIds: ['drought', 'desiccation-pulse'],
+    partialEventIds: ['cold-snap', 'antifungal-exudates'],
+    uiAccentColor: '#1a4a6a',   // deep blue tint
   },
   {
-    id: 'brood-decoy',
-    name: 'Brood Decoy',
-    description: 'Converts Beetle Disruption into a softer colony-wide penalty instead of a full sever.',
-    targetEventIds: ['beetle-disruption'],
+    id: 'chitin-lattice',
+    name: 'Chitin Lattice',
+    description: 'Full mitigation: Beetle Disruption, Insect Vector Swarm. Partial: Lignin Fortification, Spore Predation.',
+    flavorLine: 'Structural polymers reinforcing critical network junctions.',
+    targetEventIds: ['beetle-disruption', 'insect-vector-swarm'],
+    partialEventIds: ['lignin-fortification', 'spore-predation'],
+    uiAccentColor: '#3a2a0a',   // amber-brown tint
   },
   {
-    id: 'immune-mimicry',
-    name: 'Immune Mimicry',
-    description: 'Reduces Immune Response suppression by masking parts of the colony signature.',
-    targetEventIds: ['immune-response'],
+    id: 'enzyme-suppressor',
+    name: 'Enzyme Suppressor',
+    description: 'Full mitigation: Antifungal Exudates, Microbial Rivalry, Nutrient Sequestration. Partial: Viral Hijack, Root Allelopathy.',
+    flavorLine: 'Secondary metabolite inhibitors deployed. Chemical hostility suppressed.',
+    targetEventIds: ['antifungal-exudates', 'microbial-rivalry', 'nutrient-sequestration'],
+    partialEventIds: ['viral-hijack', 'root-allelopathy'],
+    uiAccentColor: '#1a3a1a',   // dark green tint
+  },
+  {
+    id: 'thermal-regulator',
+    name: 'Thermal Regulator',
+    description: 'Full mitigation: Cold Snap, Thermal Stratification, UV Surge. Partial: Desiccation Pulse, Ecosystem Feedback.',
+    flavorLine: 'Metabolic heat distribution active. Thermal gradient neutralized.',
+    targetEventIds: ['cold-snap', 'thermal-stratification', 'uv-surge'],
+    partialEventIds: ['desiccation-pulse', 'ecosystem-feedback'],
+    uiAccentColor: '#3a1a0a',   // deep orange tint
+  },
+  {
+    id: 'signal-jammer',
+    name: 'Signal Jammer',
+    description: 'Full mitigation: Immune Response, Spore Competition, Ecosystem Feedback. Partial: Viral Hijack, Microbial Rivalry.',
+    flavorLine: 'Colony signature masked. Host targeting resolution degraded.',
+    targetEventIds: ['immune-response', 'spore-competition', 'ecosystem-feedback'],
+    partialEventIds: ['viral-hijack', 'microbial-rivalry'],
+    uiAccentColor: '#2a1a3a',   // deep purple tint
+  },
+  {
+    id: 'spore-shield',
+    name: 'Spore Shield',
+    description: 'Full mitigation: Spore Predation, Lignin Fortification, Root Allelopathy. Partial: Insect Vector Swarm, Nutrient Sequestration.',
+    flavorLine: 'Reproductive tissue encased. Feeding margins reinforced.',
+    targetEventIds: ['spore-predation', 'lignin-fortification', 'root-allelopathy'],
+    partialEventIds: ['insect-vector-swarm', 'nutrient-sequestration'],
+    uiAccentColor: '#1a3a2a',   // dark teal tint
   },
 ]
 

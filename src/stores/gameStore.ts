@@ -25,6 +25,11 @@ import {
   saveState,
   maybeAppendMilestoneLog,
   createFreshState,
+  engageEnemyAction,
+  attackEnemyAction,
+  dismissEnemyNotificationAction,
+  forceEnemySpawnAction,
+  clearEnemyDebuffsAction,
   // Signal economy temporarily disabled.
   // spendSignalCoordinationCommand,
   // spendSignalVulnerabilityWindow,
@@ -51,6 +56,16 @@ export function createGameStore() {
     })
   }
 
+  function updateGameplayState(updater: (current: GameState) => GameState) {
+    const now = Date.now()
+
+    state.update((current) => {
+      const settled = engineTick(current, now)
+      const next = updater(settled)
+      return maybeAppendMilestoneLog(current, next)
+    })
+  }
+
   function runStateAction(updater: (current: GameState) => GameState): boolean {
     let changed = false
 
@@ -70,7 +85,7 @@ export function createGameStore() {
   }
 
   function absorb() {
-    updateState((current) => engineAbsorb(current))
+    updateGameplayState((current) => engineAbsorb(current))
   }
 
   function setBuyAmount(amount: BuyAmount) {
@@ -78,7 +93,7 @@ export function createGameStore() {
   }
 
   function equipCountermeasure(countermeasureId: CountermeasureId) {
-    updateState((current) => equipCountermeasureAction(current, countermeasureId))
+    updateGameplayState((current) => equipCountermeasureAction(current, countermeasureId))
   }
 
   function toggleLogPanel() {
@@ -86,31 +101,53 @@ export function createGameStore() {
   }
 
   function buyGenerator(generatorId: GeneratorId) {
-    updateState((current) => buyGeneratorAction(current, generatorId))
+    updateGameplayState((current) => buyGeneratorAction(current, generatorId))
   }
 
   function buyUpgrade(upgradeId: UpgradeId) {
-    updateState((current) => buyUpgradeAction(current, upgradeId))
+    updateGameplayState((current) => buyUpgradeAction(current, upgradeId))
   }
 
   function purchaseSkill(skillId: SkillId) {
-    updateState((current) => purchaseSkillAction(current, skillId))
+    updateGameplayState((current) => purchaseSkillAction(current, skillId))
   }
 
   function allocateStat(statId: StatId) {
-    updateState((current) => allocateStatAction(current, statId))
+    updateGameplayState((current) => allocateStatAction(current, statId))
   }
 
   function chooseStrain(strainId: StrainId) {
-    updateState((current) => chooseStrainAction(current, strainId))
+    updateGameplayState((current) => chooseStrainAction(current, strainId))
   }
 
   function advanceStage() {
-    updateState((current) => advanceStageAction(current))
+    updateGameplayState((current) => advanceStageAction(current))
   }
 
   function releaseSpores() {
-    updateState((current) => releaseSporesAction(current))
+    updateGameplayState((current) => releaseSporesAction(current))
+  }
+
+  function engageEnemy() {
+    updateGameplayState((current) => engageEnemyAction(current))
+  }
+
+  function attackEnemy() {
+    updateGameplayState((current) => attackEnemyAction(current))
+  }
+
+  function dismissEnemyNotification() {
+    updateGameplayState((current) => dismissEnemyNotificationAction(current))
+  }
+
+  function forceEnemySpawn(enemyId: string) {
+    if (!import.meta.env.DEV) return
+    updateGameplayState((current) => forceEnemySpawnAction(current, enemyId))
+  }
+
+  function clearEnemyDebuffs() {
+    if (!import.meta.env.DEV) return
+    updateGameplayState((current) => clearEnemyDebuffsAction(current))
   }
 
   function acknowledgeReveal(key: string) {
@@ -236,6 +273,11 @@ export function createGameStore() {
     purchaseSkill,
     advanceStage,
     releaseSpores,
+    engageEnemy,
+    attackEnemy,
+    dismissEnemyNotification,
+    forceEnemySpawn,
+    clearEnemyDebuffs,
     acknowledgeReveal,
     // coordinationCommand,
     // vulnerabilityWindow,

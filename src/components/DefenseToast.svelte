@@ -157,6 +157,9 @@
   $: mitigatingCountermeasure = state.nextDefenseEventId
     ? countermeasureDefinitions.find((countermeasure) => countermeasure.targetEventIds.includes(state.nextDefenseEventId as DefenseEventId)) ?? null
     : null
+  $: partialCountermeasure = state.nextDefenseEventId
+    ? countermeasureDefinitions.find((countermeasure) => countermeasure.partialEventIds.includes(state.nextDefenseEventId as DefenseEventId)) ?? null
+    : null
 
   $: forecastKey = state.nextDefenseEventId
     ? `${state.nextDefenseEventId}:${state.nextDefenseCheckAt}`
@@ -302,7 +305,9 @@
       </div>
       <div class="toast-title">{forecastName}</div>
       {#if mitigatingCountermeasure}
-        <div class="toast-body">{mitigatingCountermeasure.name} would mitigate this threat.</div>
+        <div class="toast-body">{mitigatingCountermeasure.name} fully mitigates this threat.</div>
+      {:else if partialCountermeasure}
+        <div class="toast-body">{partialCountermeasure.name} partially mitigates this threat.</div>
       {:else}
         <div class="toast-body">No countermeasure targets this threat.</div>
       {/if}

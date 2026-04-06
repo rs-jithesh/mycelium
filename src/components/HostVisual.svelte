@@ -22,8 +22,7 @@
   $: hueRotate = corruption * 0.35
   $: saturate = 100 + corruption * 0.8
   $: glitchOpacity = corruption > 75 ? (corruption - 75) / 50 : 0
-  $: veinOpacity = Math.min(1, corruption / 30)
-
+  $: veinOpacity = Math.min(1, corruption / 100)
   $: filterString = `sepia(${sepia}%) brightness(${brightness}%) contrast(${contrast}%) hue-rotate(${hueRotate}deg) saturate(${saturate}%)`
 
   // Background and border shift with corruption — amber palette
@@ -67,14 +66,24 @@
 
   // Manifestation toast visibility
   let visibleToast: string | null = null
+  let activeQueueHead: string | null = null
   let toastTimer: ReturnType<typeof setTimeout> | undefined
 
-  $: if (manifestationQueue.length > 0 && manifestationQueue[0] !== visibleToast) {
-    visibleToast = manifestationQueue[0]
-    clearTimeout(toastTimer)
-    toastTimer = setTimeout(() => {
-      visibleToast = null
-    }, 3000)
+  $: {
+    const nextQueueHead = manifestationQueue[0] ?? null
+
+    if (nextQueueHead && nextQueueHead !== activeQueueHead) {
+      activeQueueHead = nextQueueHead
+      visibleToast = nextQueueHead
+      clearTimeout(toastTimer)
+      toastTimer = setTimeout(() => {
+        visibleToast = null
+      }, 3000)
+    }
+
+    if (!nextQueueHead) {
+      activeQueueHead = null
+    }
   }
 
   onDestroy(() => {
@@ -119,27 +128,73 @@
     }
   >
     <div class="host-strip__base">
-      <span class="host-strip__label">
+      <span class="host-strip__label" style="opacity: {visibleToast && !hostCompleted ? 0 : 1}">
         {#if hostCompleted}
           {hostName.toUpperCase()} — CONSUMED
         {:else}
-          {hostName.toUpperCase()}
+          ABSORB
         {/if}
       </span>
-      {#if showHint}
+      {#if showHint && !visibleToast}
         <span class="host-strip__hint" aria-hidden="true">click to absorb</span>
       {/if}
     </div>
 
     {#if !hostCompleted}
       <div class="host-strip__veins" style="opacity: {veinOpacity}">
-        <svg viewBox="0 0 200 60" preserveAspectRatio="none">
-          <path d="M0,38 H20 V18 H45 V38 H65 V18 H90 V38 H115 V18 H140 V38 H165 V18 H200" stroke="#be8f2f" stroke-width="0.8" fill="none" opacity="0.7"/>
-          <path d="M0,12 H15 V28 H35 V12 H55 V28 H80 V12 H105 V28 H130 V12 H160 V28 H185 V12 H200" stroke="#ad8a0d" stroke-width="0.7" fill="none" opacity="0.5"/>
-          <path d="M0,50 H25 V32 H50 V50 H80 V32 H110 V50 H135 V32 H170 V50 H200" stroke="#d4a017" stroke-width="0.75" fill="none" opacity="0.6"/>
-          <path d="M5,8 H30 V22 H55 V8 H85 V22 H110 V8 H145 V22 H175 V8 H200" stroke="#8b6914" stroke-width="0.5" fill="none" opacity="0.4"/>
-          <path d="M0,42 H18 V54 H42 V42 H68 V54 H95 V42 H120 V54 H148 V42 H178 V54 H200" stroke="#c4920a" stroke-width="0.45" fill="none" opacity="0.45"/>
-          <path d="M10,56 H38 V44 H60 V56 H90 V44 H118 V56 H150 V44 H180 V56 H200" stroke="#a67c00" stroke-width="0.4" fill="none" opacity="0.35"/>
+        <svg class="host-strip__infection-svg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+          <defs>
+            <pattern id="infectionTile" x="0" y="0" width="64" height="64" patternUnits="userSpaceOnUse">
+              <rect width="64" height="64" fill="#3d2a1a"/>
+              <rect x="0" y="0" width="8" height="8" fill="#241a0f"/>
+              <rect x="32" y="16" width="6" height="6" fill="#241a0f"/>
+              <rect x="48" y="40" width="10" height="8" fill="#241a0f"/>
+              <rect x="16" y="52" width="8" height="8" fill="#241a0f"/>
+              <rect x="8" y="28" width="5" height="5" fill="#241a0f"/>
+              <rect x="56" y="8" width="6" height="6" fill="#241a0f"/>
+              <rect x="20" y="8" width="4" height="4" fill="#e8a020"/>
+              <rect x="40" y="32" width="5" height="4" fill="#d4921a"/>
+              <rect x="4" y="44" width="4" height="5" fill="#e8a020"/>
+              <rect x="52" y="52" width="4" height="4" fill="#d4921a"/>
+              <rect x="28" y="36" width="3" height="3" fill="#f0b830"/>
+              <rect x="12" y="56" width="3" height="3" fill="#e8a020"/>
+              <rect x="44" y="20" width="4" height="3" fill="#d4921a"/>
+              <rect x="12" y="12" width="4" height="4" fill="#c47a10"/>
+              <rect x="44" y="8" width="3" height="5" fill="#b8700e"/>
+              <rect x="28" y="48" width="5" height="3" fill="#c47a10"/>
+              <rect x="2" y="58" width="4" height="4" fill="#b8700e"/>
+              <rect x="58" y="28" width="4" height="4" fill="#c47a10"/>
+              <rect x="24" y="20" width="3" height="3" fill="#f0b830"/>
+              <rect x="50" y="18" width="3" height="3" fill="#e8a020"/>
+              <rect x="8" y="38" width="2" height="3" fill="#f5c040"/>
+              <rect x="36" y="54" width="3" height="2" fill="#e8a020"/>
+              <rect x="60" y="44" width="2" height="2" fill="#f0b830"/>
+              <rect x="10" y="22" width="2" height="1" fill="#8a5a0e"/>
+              <rect x="12" y="23" width="1" height="2" fill="#8a5a0e"/>
+              <rect x="30" y="28" width="4" height="1" fill="#9a6a12"/>
+              <rect x="34" y="29" width="1" height="3" fill="#9a6a12"/>
+              <rect x="46" y="36" width="1" height="4" fill="#8a5a0e"/>
+              <rect x="42" y="38" width="4" height="1" fill="#8a5a0e"/>
+              <rect x="18" y="42" width="3" height="1" fill="#9a6a12"/>
+              <rect x="20" y="43" width="1" height="3" fill="#9a6a12"/>
+              <rect x="54" y="48" width="2" height="1" fill="#8a5a0e"/>
+              <rect x="14" y="4" width="1" height="1" fill="#f5c040"/>
+              <rect x="38" y="12" width="1" height="1" fill="#ffd050"/>
+              <rect x="2" y="18" width="1" height="1" fill="#f5c040"/>
+              <rect x="62" y="34" width="1" height="1" fill="#ffd050"/>
+              <rect x="26" y="56" width="1" height="1" fill="#f5c040"/>
+              <rect x="34" y="4" width="1" height="1" fill="#ffd050"/>
+              <rect x="48" y="24" width="1" height="1" fill="#f5c040"/>
+              <rect x="6" y="48" width="1" height="1" fill="#ffd050"/>
+              <rect x="32" y="40" width="2" height="2" fill="#6a4410"/>
+              <rect x="16" y="16" width="2" height="2" fill="#6a4410"/>
+              <rect x="56" y="56" width="2" height="2" fill="#6a4410"/>
+              <rect x="0" y="32" width="3" height="2" fill="#d4921a"/>
+              <rect x="60" y="12" width="3" height="3" fill="#e8a020"/>
+              <rect x="36" y="0" width="2" height="3" fill="#f0b830"/>
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#infectionTile)"/>
         </svg>
       </div>
 
@@ -391,10 +446,11 @@
 
   .host-strip__label {
     font-family: monospace;
-    font-size: 1rem;
+    font-size: 1.25rem;
     letter-spacing: 0.25em;
-    color: #555;
+    color: #fff;
     text-transform: uppercase;
+    text-shadow: 0 0 8px rgba(0, 0, 0, 0.8), 0 0 16px rgba(0, 0, 0, 0.5);
   }
 
   .host-strip__veins {

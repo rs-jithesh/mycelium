@@ -21,6 +21,15 @@ import type {
 } from '../lib/game'
 import { createDefaultState } from './values'
 import {
+  createCombatSession,
+  performPlayerCombatAttack,
+  resolveCombatOutcomeFromSession,
+  tickEnemyCombat,
+} from './pve/combat'
+import { getEnemyById } from './pve/enemies'
+import { getEnemySpawnCooldownMs, rollEnemySpawn, shouldAttemptEnemySpawn } from './pve/spawn'
+import type { ActiveEnemyDebuff } from './pve/enemy.types'
+import {
   generatorDefinitions,
   upgradeDefinitions,
   hostDefinitions,
@@ -29,6 +38,7 @@ import {
   hostEchoDefinitions,
   getCurrentHostDefinition,
   hasNextStage as hasNextStageUtil,
+  countermeasureDefinitions,
 } from '../lib/game'
 
 // --- HELPERS ---
@@ -48,6 +58,13 @@ function appendLog(log: string[], message: string): string[] {
 function appendLogs(log: string[], messages: string[]): string[] {
   if (messages.length === 0) return log
   return clampLog([...log, ...messages.map(createLogEntry)])
+}
+
+function incrementCount(record: Record<string, number>, key: string): Record<string, number> {
+  return {
+    ...record,
+    [key]: (record[key] ?? 0) + 1,
+  }
 }
 
 function formatEchoBonus(bonus: { type: string; value: number }): string {
@@ -458,11 +475,14 @@ function rollDefenseEventId(state: GameState): DefenseEventId {
     (event) => state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max
   )
 
-  if (eligibleEvents.length === 0) {
+  const nonRepeatEvents = eligibleEvents.filter((event) => event.id !== state.lastDefenseEventId)
+  const eventPool = nonRepeatEvents.length > 0 ? nonRepeatEvents : eligibleEvents
+
+  if (eventPool.length === 0) {
     return 'drought'
   }
 
-  return getRandomItem(eligibleEvents).id
+  return getRandomItem(eventPool).id
 }
 
 function ensureDefenseForecast(state: GameState): GameState {
@@ -730,17 +750,38 @@ function createDefenseEvent(state: GameState, now: number, eventId: DefenseEvent
 }
 
 function applyCountermeasureToEvent(state: GameState, event: NonNullable<ReturnType<typeof createDefenseEvent>>, now: number) {
-  if (state.equippedCountermeasure !== 'brood-decoy' || event.id !== 'beetle-disruption') {
-    return event
+  const equipped = state.equippedCountermeasure
+
+  // Chitin Lattice special case: converts beetle-disruption and insect-vector-swarm
+  // from their special mechanics (generator sever / heavy penalty) into a softer
+  // colony-wide output reduction instead. This preserves the intent of the old
+  // Brood Decoy while fitting the new protocol system.
+  if (equipped === 'chitin-lattice') {
+    if (event.id === 'beetle-disruption' && event.disabledGeneratorId) {
+      return {
+        ...event,
+        description: 'Lattice absorbs the impact. Structural damage diffused colony-wide.',
+        endsAt: now + 30_000,    // shortened duration when mitigated
+        disabledGeneratorId: undefined,
+        multiplier: new Decimal(BALANCE.COUNTERMEASURE_BROOD_DECOY_FALLBACK_MULTIPLIER),
+      }
+    }
+
+    if (event.id === 'insect-vector-swarm') {
+      // Partially converts the swarm: still penalizes but removes click penalty
+      return {
+        ...event,
+        description: 'Chitin lattice deflects physical intrusion. Output reduced but click channels intact.',
+        clickMultiplier: undefined,   // remove click penalty
+        // passive multiplier remains — lattice doesn't fully stop it
+      }
+    }
   }
 
-  return {
-    ...event,
-    description: 'Predator pressure redirected into decoy tissue. All output reduced slightly for 30s.',
-    endsAt: now + 30_000,
-    disabledGeneratorId: undefined,
-    multiplier: new Decimal(BALANCE.COUNTERMEASURE_BROOD_DECOY_FALLBACK_MULTIPLIER),
-  }
+  // All other events: no structural modification needed.
+  // Mitigation is applied through getMitigatedPenaltyMultiplier in formulas.ts
+  // at production calculation time, not by modifying the event object.
+  return event
 }
 
 function getDefenseEventLogLines(event: { id: string; disabledGeneratorId?: string; name: string }): string[] {
@@ -806,19 +847,45 @@ function maybeAppendDefenseFlavorLog(state: GameState, deltaMs: number): GameSta
 }
 
 function getCountermeasureLogLines(countermeasureId: CountermeasureId | null, eventId: DefenseEventId): string[] {
-  if (countermeasureId === 'moisture-buffer' && eventId === 'drought') {
-    return [createLogEntry('Moisture Buffer engages. Dry-host contraction partially absorbed.')]
+  if (!countermeasureId) return []
+
+  const definition = countermeasureDefinitions.find((c) => c.id === countermeasureId)
+  if (!definition) return []
+
+  const isFullCoverage = definition.targetEventIds.includes(eventId)
+  const isPartialCoverage = definition.partialEventIds.includes(eventId)
+
+  if (!isFullCoverage && !isPartialCoverage) return []
+
+  const protocolLines: Record<CountermeasureId, Record<'full' | 'partial', string>> = {
+    'moisture-buffer': {
+      full: 'Moisture Buffer engages. Hydric reserves stabilizing the network.',
+      partial: 'Moisture Buffer active. Limited cross-spectrum absorption.',
+    },
+    'chitin-lattice': {
+      full: 'Chitin Lattice deploys. Structural intrusion absorbed.',
+      partial: 'Chitin Lattice partially deflects. Some penetration persists.',
+    },
+    'enzyme-suppressor': {
+      full: 'Enzyme Suppressor active. Chemical hostility neutralized.',
+      partial: 'Enzyme Suppressor partially effective. Residual chemistry remains.',
+    },
+    'thermal-regulator': {
+      full: 'Thermal Regulator engaged. Metabolic gradient corrected.',
+      partial: 'Thermal Regulator partially compensating. Some thermal stress persists.',
+    },
+    'signal-jammer': {
+      full: 'Signal Jammer active. Colony signature masked from host targeting.',
+      partial: 'Signal Jammer partially masking. Detection probability reduced.',
+    },
+    'spore-shield': {
+      full: 'Spore Shield deployed. Reproductive tissue and feeding margins protected.',
+      partial: 'Spore Shield partially covering. Peripheral exposure remains.',
+    },
   }
 
-  if (countermeasureId === 'brood-decoy' && eventId === 'beetle-disruption') {
-    return [createLogEntry('Brood Decoy triggers. Predator pressure diffused across expendable tissue.')]
-  }
-
-  if (countermeasureId === 'immune-mimicry' && eventId === 'immune-response') {
-    return [createLogEntry('Immune Mimicry activates. Host targeting loses colony fidelity.')]
-  }
-
-  return []
+  const tier = isFullCoverage ? 'full' : 'partial'
+  return [createLogEntry(protocolLines[countermeasureId][tier])]
 }
 
 export function checkVisibilityUnlocks(state: GameState, now = Date.now()): GameState {
@@ -1002,6 +1069,9 @@ export function tick(state: GameState, now = Date.now()): GameState {
 
   next = tickSignalSystem(next, deltaMs)
   next = tickDefenseResponseState(next, deltaMs)
+  next = tickEnemyDebuffs(next, deltaMs)
+  next = tickActiveEnemyCombat(next, deltaMs)
+  next = tryTriggerEnemyEncounter(next, now)
   next = maybeAppendDefenseFlavorLog(next, deltaMs)
 
   // Drain manifestation queue: one message every 2 seconds
@@ -1030,6 +1100,134 @@ function tickDefenseResponseState(state: GameState, deltaMs: number): GameState 
     ...state,
     activeParasiteDefenseBurstMs: Math.max(0, state.activeParasiteDefenseBurstMs - deltaMs),
   }
+}
+
+function tickEnemyDebuffs(state: GameState, deltaMs: number): GameState {
+  if (state.activeEnemyDebuffs.length === 0) {
+    return state
+  }
+
+  const expired: ActiveEnemyDebuff[] = []
+  const activeEnemyDebuffs = state.activeEnemyDebuffs.flatMap((debuff) => {
+    const remainingMs = debuff.remainingMs - deltaMs
+    if (remainingMs <= 0) {
+      expired.push(debuff)
+      return []
+    }
+    return [{
+      ...debuff,
+      remainingMs,
+    }]
+  })
+
+  const next = {
+    ...state,
+    activeEnemyDebuffs,
+    log: expired.length > 0
+      ? appendLogs(state.log, expired.map((debuff) => `${debuff.name} dissipated. Local tissue recovers.`))
+      : state.log,
+  }
+
+  return expired.length > 0 ? recalculateDerivedState(next) : next
+}
+
+function tryTriggerEnemyEncounter(state: GameState, now: number): GameState {
+  if (!shouldAttemptEnemySpawn(state, now)) {
+    return state
+  }
+
+  const nextEnemyCheckAt = now + getEnemySpawnCooldownMs(state)
+  const encounter = rollEnemySpawn(state, now)
+  if (!encounter) {
+    return {
+      ...state,
+      nextEnemyCheckAt,
+      forcedEnemyId: null,
+    }
+  }
+
+  return {
+    ...state,
+    activeEnemyEncounter: encounter,
+    pendingEnemyNotification: encounter.notification,
+    knownEnemies: state.knownEnemies.includes(encounter.enemyId)
+      ? state.knownEnemies
+      : [...state.knownEnemies, encounter.enemyId],
+    enemyEncounterCounts: incrementCount(state.enemyEncounterCounts, encounter.enemyId),
+    nextEnemyCheckAt,
+    forcedEnemyId: null,
+    log: appendLog(state.log, encounter.notification),
+  }
+}
+
+function finalizeEnemyCombat(state: GameState): GameState {
+  if (!state.activeEnemyCombat) {
+    return state
+  }
+
+  const enemy = getEnemyById(state.activeEnemyCombat.enemyId)
+  if (!enemy) {
+    return {
+      ...state,
+      activeEnemyCombat: null,
+      activeEnemyEncounter: null,
+      pendingEnemyNotification: null,
+    }
+  }
+
+  const result = resolveCombatOutcomeFromSession(state, enemy, state.activeEnemyCombat)
+  const victory = result.outcome !== 'defeat'
+  const withRewards = result.biomassReward > 0
+    ? gainBiomass(state, new Decimal(result.biomassReward), 'passive')
+    : state
+  const nextSignal = Math.max(0, withRewards.signal + result.signalReward)
+
+  return recalculateDerivedState({
+    ...withRewards,
+    signal: nextSignal,
+    activeEnemyEncounter: null,
+    activeEnemyCombat: null,
+    pendingEnemyNotification: null,
+    lastEnemyCombatResult: result,
+    activeEnemyDebuffs: result.debuff
+      ? [...withRewards.activeEnemyDebuffs, result.debuff]
+      : withRewards.activeEnemyDebuffs,
+    enemyVictoryCounts: victory
+      ? incrementCount(withRewards.enemyVictoryCounts, enemy.id)
+      : withRewards.enemyVictoryCounts,
+    enemyDefeatCounts: !victory
+      ? incrementCount(withRewards.enemyDefeatCounts, enemy.id)
+      : withRewards.enemyDefeatCounts,
+    totalEnemiesDefeated: withRewards.totalEnemiesDefeated + (victory ? 1 : 0),
+    totalEnemiesFailed: withRewards.totalEnemiesFailed + (victory ? 0 : 1),
+    log: appendLogs(withRewards.log, result.logLines),
+  })
+}
+
+function tickActiveEnemyCombat(state: GameState, deltaMs: number): GameState {
+  if (!state.activeEnemyCombat) {
+    return state
+  }
+
+  const enemy = getEnemyById(state.activeEnemyCombat.enemyId)
+  if (!enemy) {
+    return {
+      ...state,
+      activeEnemyCombat: null,
+    }
+  }
+
+  const activeEnemyCombat = tickEnemyCombat(state, state.activeEnemyCombat, enemy, deltaMs)
+  const next = {
+    ...state,
+    activeEnemyCombat,
+  }
+
+  if (activeEnemyCombat.enemyHealth <= 0 || activeEnemyCombat.playerIntegrity <= 0) {
+    return finalizeEnemyCombat(next)
+  }
+
+  return next
 }
 
 // --- SIGNAL ECONOMY ---
@@ -1516,11 +1714,17 @@ export function advanceStageAction(state: GameState): GameState {
     hostName: nextHost.name,
     stageLabel: nextHost.stageLabel,
     subtitle: nextHost.subtitle,
+    hostFlavor: nextHost.flavor,
     hostHealth: nextHost.health,
     hostMaxHealth: nextHost.health,
     hostCompleted: false,
     activeDefenseEvents: [],
     nextDefenseEventId: null,
+    activeEnemyEncounter: null,
+    activeEnemyCombat: null,
+    pendingEnemyNotification: null,
+    activeEnemyDebuffs: [],
+    lastEnemyCombatResult: null,
     activeParasiteDefenseBurstMs: 0,
     _currentHostClickDamage: new Decimal(0),
     _currentHostPassiveDamage: new Decimal(0),
@@ -1528,6 +1732,7 @@ export function advanceStageAction(state: GameState): GameState {
     hostCorruptionPercent: 0,
     manifestationQueue: [],
     nextDefenseCheckAt: Date.now() + BALANCE.DEFENSE_EVENT_COOLDOWN_MS,
+    nextEnemyCheckAt: Date.now() + BALANCE.PVE_ENEMY_FIRST_CHECK_MS,
     log: clampLog([
       ...state.log,
       createLogEntry(`Host cleared. ${echoDef.name} absorbed: ${echoDef.description}`),
@@ -1554,6 +1759,11 @@ export function releaseSporesAction(state: GameState): GameState {
       ...freshState,
       geneticMemory: totalMemory,
       hostEchoes: state.hostEchoes,
+      knownEnemies: state.knownEnemies,
+      enemyEncounterCounts: state.enemyEncounterCounts,
+      enemyVictoryCounts: state.enemyVictoryCounts,
+      enemyDefeatCounts: state.enemyDefeatCounts,
+      lastEnemyCombatResult: null,
       prestigeCount: state.prestigeCount + 1,
       hasPrestiged: true,
       highestStageReached: Math.max(state.highestStageReached, hostDefinitions.length),
@@ -1579,7 +1789,92 @@ export function createFreshState(): GameState {
   return {
     ...fresh,
     nextDefenseCheckAt: Date.now() + BALANCE.DEFENSE_EVENT_COOLDOWN_MS,
+    nextEnemyCheckAt: Date.now() + BALANCE.PVE_ENEMY_FIRST_CHECK_MS,
   }
+}
+
+export function engageEnemyAction(state: GameState): GameState {
+  if (!state.activeEnemyEncounter) {
+    return state
+  }
+
+  if (state.activeEnemyCombat) {
+    return state
+  }
+
+  const enemy = getEnemyById(state.activeEnemyEncounter.enemyId)
+  if (!enemy) {
+    return {
+      ...state,
+      activeEnemyEncounter: null,
+      activeEnemyCombat: null,
+      pendingEnemyNotification: null,
+    }
+  }
+
+  return {
+    ...state,
+    activeEnemyCombat: createCombatSession(state, enemy, Date.now()),
+    pendingEnemyNotification: null,
+    log: appendLog(state.log, `Combat initiated against ${enemy.name}.`),
+  }
+}
+
+export function attackEnemyAction(state: GameState): GameState {
+  if (!state.activeEnemyCombat) {
+    return state
+  }
+
+  const enemy = getEnemyById(state.activeEnemyCombat.enemyId)
+  if (!enemy) {
+    return {
+      ...state,
+      activeEnemyCombat: null,
+    }
+  }
+
+  const activeEnemyCombat = performPlayerCombatAttack(state, state.activeEnemyCombat, enemy)
+  const next = {
+    ...state,
+    activeEnemyCombat,
+  }
+
+  if (activeEnemyCombat.enemyHealth <= 0) {
+    return finalizeEnemyCombat(next)
+  }
+
+  return next
+}
+
+export function dismissEnemyNotificationAction(state: GameState): GameState {
+  if (state.pendingEnemyNotification === null) {
+    return state
+  }
+
+  return {
+    ...state,
+    pendingEnemyNotification: null,
+  }
+}
+
+export function forceEnemySpawnAction(state: GameState, enemyId: string): GameState {
+  return {
+    ...state,
+    forcedEnemyId: enemyId,
+    nextEnemyCheckAt: Date.now(),
+  }
+}
+
+export function clearEnemyDebuffsAction(state: GameState): GameState {
+  if (state.activeEnemyDebuffs.length === 0) {
+    return state
+  }
+
+  return recalculateDerivedState({
+    ...state,
+    activeEnemyDebuffs: [],
+    log: appendLog(state.log, 'Enemy debuffs purged from the active mesh.'),
+  })
 }
 
 // --- LOG PANEL TOGGLE ---
@@ -1604,18 +1899,35 @@ export function setBuyAmountAction(state: GameState, amount: 1 | 10 | 100 | 'MAX
 }
 
 export function equipCountermeasureAction(state: GameState, countermeasureId: CountermeasureId): GameState {
-  if (state.equippedCountermeasure === countermeasureId) return state
-  if (state.equippedCountermeasure !== null) return state
+  // Cannot switch while a defense event is active
+  if (state.activeDefenseEvents.length > 0) {
+    return {
+      ...state,
+      log: appendLog(
+        state.log,
+        'Protocol switch denied. A defense event is active. Wait for it to resolve.'
+      ),
+    }
+  }
 
-  const name = countermeasureId
-    .split('-')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
+  // Already equipped — no-op
+  if (state.equippedCountermeasure === countermeasureId) return state
+
+  const definition = countermeasureDefinitions.find((c) => c.id === countermeasureId)
+  if (!definition) return state
+
+  const previousName = state.equippedCountermeasure
+    ? countermeasureDefinitions.find((c) => c.id === state.equippedCountermeasure)?.name ?? state.equippedCountermeasure
+    : null
+
+  const logLine = previousName
+    ? `Protocol switched: ${previousName} \u2192 ${definition.name}. ${definition.flavorLine}`
+    : `${definition.name} protocol engaged. ${definition.flavorLine}`
 
   return {
     ...state,
     equippedCountermeasure: countermeasureId,
-    log: appendLog(state.log, `${name} protocol equipped for this run. Countermeasure loadout locked.`),
+    log: appendLog(state.log, logLine),
   }
 }
 
@@ -1731,6 +2043,7 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
   return recalculateDerivedState({
     ...state,
     activeDefenseEvents: [...state.activeDefenseEvents, mitigatedEvent],
+    lastDefenseEventId: mitigatedEvent.id,
     _pendingOfflineEvents: [
       ...state._pendingOfflineEvents,
       {
@@ -1952,6 +2265,7 @@ interface SerializedState {
   hostName: string
   stageLabel: string
   subtitle: string
+  hostFlavor: string
   hostHealth: string
   hostMaxHealth: string
   hostCompleted: boolean
@@ -1974,6 +2288,7 @@ interface SerializedState {
     disabledGeneratorId?: string
   }>
   nextDefenseEventId: DefenseEventId | null
+  lastDefenseEventId: DefenseEventId | null
   equippedCountermeasure: CountermeasureId | null
   activeParasiteDefenseBurstMs: number
   activeCoordinationLinks: GameState['activeCoordinationLinks']
@@ -2008,6 +2323,19 @@ interface SerializedState {
   }>
   hostCorruptionPercent: number
   manifestationQueue: string[]
+  activeEnemyEncounter: GameState['activeEnemyEncounter']
+  knownEnemies: string[]
+  enemyEncounterCounts: Record<string, number>
+  enemyVictoryCounts: Record<string, number>
+  enemyDefeatCounts: Record<string, number>
+  totalEnemiesDefeated: number
+  totalEnemiesFailed: number
+  activeEnemyDebuffs: GameState['activeEnemyDebuffs']
+  activeEnemyCombat: GameState['activeEnemyCombat']
+  nextEnemyCheckAt: number
+  pendingEnemyNotification: string | null
+  forcedEnemyId: string | null
+  lastEnemyCombatResult: GameState['lastEnemyCombatResult']
 }
 
 function toDecimal(value: string | number | Decimal): Decimal {
@@ -2029,6 +2357,7 @@ function serialize(s: GameState): SerializedState {
     hostName: s.hostName,
     stageLabel: s.stageLabel,
     subtitle: s.subtitle,
+    hostFlavor: s.hostFlavor,
     hostHealth: s.hostHealth.toString(),
     hostMaxHealth: s.hostMaxHealth.toString(),
     hostCompleted: s.hostCompleted,
@@ -2047,6 +2376,7 @@ function serialize(s: GameState): SerializedState {
       clickMultiplier: event.clickMultiplier?.toString(),
     })),
     nextDefenseEventId: s.nextDefenseEventId,
+    lastDefenseEventId: s.lastDefenseEventId,
     equippedCountermeasure: s.equippedCountermeasure,
     activeParasiteDefenseBurstMs: s.activeParasiteDefenseBurstMs,
     activeCoordinationLinks: s.activeCoordinationLinks,
@@ -2075,6 +2405,19 @@ function serialize(s: GameState): SerializedState {
     })),
     hostCorruptionPercent: s.hostCorruptionPercent,
     manifestationQueue: s.manifestationQueue,
+    activeEnemyEncounter: s.activeEnemyEncounter,
+    knownEnemies: s.knownEnemies,
+    enemyEncounterCounts: s.enemyEncounterCounts,
+    enemyVictoryCounts: s.enemyVictoryCounts,
+    enemyDefeatCounts: s.enemyDefeatCounts,
+    totalEnemiesDefeated: s.totalEnemiesDefeated,
+    totalEnemiesFailed: s.totalEnemiesFailed,
+    activeEnemyDebuffs: s.activeEnemyDebuffs,
+    activeEnemyCombat: s.activeEnemyCombat,
+    nextEnemyCheckAt: s.nextEnemyCheckAt,
+    pendingEnemyNotification: s.pendingEnemyNotification,
+    forcedEnemyId: s.forcedEnemyId,
+    lastEnemyCombatResult: s.lastEnemyCombatResult,
   }
 }
 
@@ -2107,6 +2450,7 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
     hostName: raw.hostName ?? base.hostName,
     stageLabel: raw.stageLabel ?? base.stageLabel,
     subtitle: raw.subtitle ?? base.subtitle,
+    hostFlavor: raw.hostFlavor ?? base.hostFlavor,
     hostHealth: toDecimal(raw.hostHealth ?? base.hostHealth),
     hostMaxHealth: toDecimal(raw.hostMaxHealth ?? base.hostMaxHealth),
     hostCompleted: raw.hostCompleted ?? false,
@@ -2139,7 +2483,25 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
       disabledGeneratorId: event.disabledGeneratorId as import('../lib/game').GeneratorId | undefined,
     })),
     nextDefenseEventId: raw.nextDefenseEventId ?? base.nextDefenseEventId,
-    equippedCountermeasure: raw.equippedCountermeasure ?? base.equippedCountermeasure,
+    lastDefenseEventId: raw.lastDefenseEventId ?? base.lastDefenseEventId,
+    equippedCountermeasure: (() => {
+      const rawCountermeasure = raw.equippedCountermeasure
+      if (!rawCountermeasure) return base.equippedCountermeasure
+      // Map old IDs to new equivalents where possible, null otherwise
+      const validIds: CountermeasureId[] = [
+        'moisture-buffer', 'chitin-lattice', 'enzyme-suppressor',
+        'thermal-regulator', 'signal-jammer', 'spore-shield',
+      ]
+      if (validIds.includes(rawCountermeasure as CountermeasureId)) {
+        return rawCountermeasure as CountermeasureId
+      }
+      const migrationMap: Record<string, CountermeasureId> = {
+        'moisture-buffer': 'moisture-buffer',
+        'brood-decoy': 'chitin-lattice',
+        'immune-mimicry': 'signal-jammer',
+      }
+      return migrationMap[rawCountermeasure] ?? null
+    })(),
     activeParasiteDefenseBurstMs: raw.activeParasiteDefenseBurstMs ?? base.activeParasiteDefenseBurstMs,
     activeCoordinationLinks: raw.activeCoordinationLinks ?? base.activeCoordinationLinks,
     activeVulnerabilityWindow: raw.activeVulnerabilityWindow ?? base.activeVulnerabilityWindow,
@@ -2167,6 +2529,19 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
     _pendingOfflineEvents: normalizeOfflineEvents(raw._pendingOfflineEvents),
     hostCorruptionPercent: raw.hostCorruptionPercent ?? base.hostCorruptionPercent,
     manifestationQueue: raw.manifestationQueue ?? base.manifestationQueue,
+    activeEnemyEncounter: raw.activeEnemyEncounter ?? base.activeEnemyEncounter,
+    knownEnemies: raw.knownEnemies ?? base.knownEnemies,
+    enemyEncounterCounts: raw.enemyEncounterCounts ?? base.enemyEncounterCounts,
+    enemyVictoryCounts: raw.enemyVictoryCounts ?? base.enemyVictoryCounts,
+    enemyDefeatCounts: raw.enemyDefeatCounts ?? base.enemyDefeatCounts,
+    totalEnemiesDefeated: raw.totalEnemiesDefeated ?? base.totalEnemiesDefeated,
+    totalEnemiesFailed: raw.totalEnemiesFailed ?? base.totalEnemiesFailed,
+    activeEnemyDebuffs: raw.activeEnemyDebuffs ?? base.activeEnemyDebuffs,
+    activeEnemyCombat: raw.activeEnemyCombat ?? base.activeEnemyCombat,
+    nextEnemyCheckAt: raw.nextEnemyCheckAt ?? base.nextEnemyCheckAt,
+    pendingEnemyNotification: raw.pendingEnemyNotification ?? base.pendingEnemyNotification,
+    forcedEnemyId: raw.forcedEnemyId ?? base.forcedEnemyId,
+    lastEnemyCombatResult: raw.lastEnemyCombatResult ?? base.lastEnemyCombatResult,
   }
 
   return checkVisibilityUnlocks(recalculateDerivedState(normalized), now)

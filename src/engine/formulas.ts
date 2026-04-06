@@ -13,6 +13,7 @@ import {
   strainDefinitions,
   skillDefinitions,
   hostDefinitions,
+  countermeasureDefinitions,
 } from '../lib/game'
 
 // Local lookup helpers (pure, no side effects)
@@ -148,33 +149,64 @@ export function getDefenseMitigation(state: GameState): number {
   return Math.min(BALANCE.DEFENSE_MITIGATION_CAP, mitigation)
 }
 
-function getCountermeasureMitigationBonus(state: GameState, eventId?: DefenseEventId): number {
-  if (!eventId || !state.equippedCountermeasure) return 0
+export function getMitigatedPenaltyMultiplier(
+  eventMultiplier: Decimal,
+  state: GameState,
+  eventId: DefenseEventId
+): Decimal {
+  if (eventMultiplier.gte(1)) return eventMultiplier  // no penalty to mitigate
 
-  if (state.equippedCountermeasure === 'moisture-buffer' && eventId === 'drought') {
-    return BALANCE.COUNTERMEASURE_MOISTURE_BUFFER_MITIGATION
+  const equipped = state.equippedCountermeasure
+  if (!equipped) return eventMultiplier  // no protocol equipped
+
+  // Determine mitigation tier for this event + protocol combination
+  const definition = countermeasureDefinitions.find((c) => c.id === equipped)
+  if (!definition) return eventMultiplier
+
+  let baseMitigation = 0
+  if (definition.targetEventIds.includes(eventId)) {
+    baseMitigation = BALANCE.COUNTERMEASURE_FULL_MITIGATION
+  } else if (definition.partialEventIds.includes(eventId)) {
+    baseMitigation = BALANCE.COUNTERMEASURE_PARTIAL_MITIGATION
+  } else {
+    return eventMultiplier  // no coverage — penalty applies in full
   }
 
-  if (state.equippedCountermeasure === 'immune-mimicry' && eventId === 'immune-response') {
-    return BALANCE.COUNTERMEASURE_IMMUNE_MIMICRY_MITIGATION
-  }
+  // Resilience stat bonus — stacks additively
+  const resilienceBonus = state.stats.resilience * BALANCE.COUNTERMEASURE_RESILIENCE_BONUS_PER_POINT
 
-  return 0
+  // Chitin Shell skill bonus
+  const chitinBonus = state.unlockedSkills.includes('chitin-shell')
+    ? BALANCE.CHITIN_SHELL_MITIGATION_BONUS
+    : 0
+
+  // Spore Hardening skill bonus
+  const sporeHardeningBonus = state.unlockedSkills.includes('spore-hardening')
+    ? BALANCE.SPORE_HARDENING_MITIGATION_BONUS
+    : 0
+
+  const totalMitigation = Math.min(
+    BALANCE.COUNTERMEASURE_RESILIENCE_MITIGATION_CAP,
+    baseMitigation + resilienceBonus + chitinBonus + sporeHardeningBonus
+  )
+
+  // Apply mitigation: move the multiplier toward 1.0 by the mitigation fraction
+  // e.g. multiplier 0.55 (-45%), mitigation 0.70:
+  // penalty depth = 0.45, mitigated depth = 0.45 * (1 - 0.70) = 0.135
+  // mitigated multiplier = 1 - 0.135 = 0.865
+  const penaltyDepth = new Decimal(1).sub(eventMultiplier)
+  const mitigatedDepth = penaltyDepth.mul(1 - totalMitigation)
+  return new Decimal(1).sub(mitigatedDepth)
 }
 
-export function getMitigatedPenaltyMultiplier(baseMultiplier: Decimal, state: GameState, eventId?: DefenseEventId): Decimal {
-  if (baseMultiplier.gte(1)) {
-    return baseMultiplier
-  }
-
-  let mitigation = getDefenseMitigation(state) + getCountermeasureMitigationBonus(state, eventId)
-  if (state.strain === 'symbiote' && state.activeDefenseEvents.length > 0) {
-    mitigation += BALANCE.STRAIN_SYMBIOTE_ACTIVE_DEFENSE_MITIGATION_BONUS
-  }
-
-  mitigation = Math.min(BALANCE.DEFENSE_MITIGATION_CAP, mitigation)
-  const reducedPenalty = 1 - (1 - baseMultiplier.toNumber()) * (1 - mitigation)
-  return new Decimal(reducedPenalty)
+export function getMitigatedClickMultiplier(
+  clickMultiplier: Decimal,
+  state: GameState,
+  eventId: DefenseEventId
+): Decimal {
+  // Identical logic to getMitigatedPenaltyMultiplier.
+  // Click multiplier mitigation uses the same coverage tier and stat bonuses.
+  return getMitigatedPenaltyMultiplier(clickMultiplier, state, eventId)
 }
 
 export function getClickDefenseMultiplier(state: GameState): Decimal {
@@ -182,7 +214,7 @@ export function getClickDefenseMultiplier(state: GameState): Decimal {
     if (!event.clickMultiplier) {
       return multiplier
     }
-    return multiplier.mul(getMitigatedPenaltyMultiplier(event.clickMultiplier, state, event.id))
+    return multiplier.mul(getMitigatedClickMultiplier(event.clickMultiplier, state, event.id))
   }, new Decimal(1))
 }
 
@@ -319,6 +351,14 @@ export function getProductionMultiplier(state: GameState, generatorId: Generator
 
   for (const event of state.activeDefenseEvents) {
     multiplier = multiplier.mul(getMitigatedPenaltyMultiplier(event.multiplier, state, event.id))
+  }
+
+  for (const debuff of state.activeEnemyDebuffs) {
+    for (const effect of debuff.effects) {
+      if (effect.type === 'bpsMultiplier') {
+        multiplier = multiplier.mul(1 - effect.magnitude)
+      }
+    }
   }
 
   // Signal production multiplier — active on run 2+ only.
@@ -587,6 +627,15 @@ export function getBaseClickValue(state: GameState): Decimal {
   }
 
   value = value.mul(getClickDefenseMultiplier(state))
+
+  for (const debuff of state.activeEnemyDebuffs) {
+    for (const effect of debuff.effects) {
+      if (effect.type === 'clickMultiplier') {
+        value = value.mul(1 - effect.magnitude)
+      }
+    }
+  }
+
   value = value.mul(getGeneticMemoryBonusMultiplier(state))
 
   return value
@@ -668,7 +717,14 @@ export function formatDuration(ms: number): string {
 }
 
 export function debugEfficiencyCliff() {
-  const results = []
+  const results: Array<{
+    transition: string
+    efficiencyAtThreshold: string
+    efficiencyAtUnlock: string
+    cliffMultiplier: string
+    target: string
+    pass: boolean
+  }> = []
 
   for (let tier = 0; tier < generatorDefinitions.length - 1; tier += 1) {
     const currentGenerator = generatorDefinitions[tier]
