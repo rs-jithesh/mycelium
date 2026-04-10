@@ -25,6 +25,10 @@ import {
   saveState,
   maybeAppendMilestoneLog,
   createFreshState,
+  startGrindEventSession,
+  triggerGrindEvent,
+  scanDefenseEventAction,
+  setPreemptiveCountermeasureAction,
   // Signal economy temporarily disabled.
   // spendSignalCoordinationCommand,
   // spendSignalVulnerabilityWindow,
@@ -34,7 +38,24 @@ import {
 import type { GameState } from '../lib/game'
 import { BALANCE } from '../engine/balance.config'
 
+declare global {
+  interface Window {
+    gameDebug: {
+      getTimeScale: () => number
+      setTimeScale: (scale: number) => void
+      speedUp: () => void
+      slowDown: () => void
+      pause: () => void
+      resume: () => void
+      getState: () => GameState | undefined
+    }
+  }
+}
+
 export const _pendingOfflineNarrative = writable<OfflineNarrative | null>(null)
+
+let timeScale = 1.0
+let lastTickTime = Date.now()
 
 export function createGameStore() {
   const loaded = loadStateWithNarrative()
@@ -64,8 +85,10 @@ export function createGameStore() {
   }
 
   function tick(now = Date.now()) {
+    const scaledNow = lastTickTime + (now - lastTickTime) * timeScale
+    lastTickTime = now
     updateState((current) =>
-      engineTick(current, now)
+      engineTick(current, scaledNow)
     )
   }
 
@@ -115,6 +138,22 @@ export function createGameStore() {
 
   function acknowledgeReveal(key: string) {
     updateState((current) => acknowledgeRevealAction(current, key))
+  }
+
+  function startGrindSession() {
+    updateState((current) => startGrindEventSession(current))
+  }
+
+  function grindEvent() {
+    updateState((current) => triggerGrindEvent(current))
+  }
+
+  function scanDefenseEvent() {
+    updateState((current) => scanDefenseEventAction(current))
+  }
+
+  function setPreemptiveCountermeasure() {
+    updateState((current) => setPreemptiveCountermeasureAction(current))
   }
 
   // Signal economy temporarily disabled.
@@ -194,6 +233,8 @@ export function createGameStore() {
   function start() {
     if (typeof window === 'undefined') return
 
+    lastTickTime = Date.now()
+
     if (!tickTimer) {
       tickTimer = window.setInterval(() => tick(), BALANCE.TICK_MS)
     }
@@ -225,6 +266,40 @@ export function createGameStore() {
     document.addEventListener('visibilitychange', handleVisibilityChangeAction)
   }
 
+  if (typeof window !== 'undefined') {
+    window.gameDebug = {
+      getTimeScale: () => timeScale,
+      setTimeScale: (scale: number) => {
+        timeScale = scale
+        console.log(`[DEBUG] Time scale set to ${timeScale}x`)
+      },
+      speedUp: () => {
+        const newScale = Math.min(timeScale * 2, 1024)
+        timeScale = newScale
+        console.log(`[DEBUG] Time scale: ${timeScale}x`)
+      },
+      slowDown: () => {
+        const newScale = Math.max(timeScale / 2, 0)
+        timeScale = newScale
+        console.log(`[DEBUG] Time scale: ${timeScale}x`)
+      },
+      pause: () => {
+        timeScale = 0
+        console.log('[DEBUG] Game paused')
+      },
+      resume: () => {
+        timeScale = 1
+        console.log('[DEBUG] Game resumed (1x speed)')
+      },
+      getState: () => {
+        let snapshot: GameState | undefined
+        const unsubscribe = state.subscribe((v) => { snapshot = v })
+        unsubscribe()
+        return snapshot
+      },
+    }
+  }
+
   return {
     subscribe: state.subscribe,
     absorb,
@@ -237,6 +312,10 @@ export function createGameStore() {
     advanceStage,
     releaseSpores,
     acknowledgeReveal,
+    startGrindSession,
+    grindEvent,
+    scanDefenseEvent,
+    setPreemptiveCountermeasure,
     // coordinationCommand,
     // vulnerabilityWindow,
     // rivalSuppression,

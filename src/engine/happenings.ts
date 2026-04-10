@@ -18,6 +18,9 @@ import type {
   StatId,
   StrainId,
   UpgradeId,
+  ZoneState,
+  HostId,
+  ProactiveCountermeasureId,
 } from '../lib/game'
 import { createDefaultState } from './values'
 import {
@@ -29,6 +32,7 @@ import {
   hostEchoDefinitions,
   getCurrentHostDefinition,
   hasNextStage as hasNextStageUtil,
+  countermeasureDefinitions,
 } from '../lib/game'
 
 // --- HELPERS ---
@@ -146,6 +150,10 @@ export type DefenseFlavorDefinition = {
   triggerLogs: string[]
   creepLogs: string[]
   expirationLog: string
+  isImmediateHit?: boolean
+  isGrindable?: boolean
+  isExtinctionEvent?: boolean
+  meterRegressionPercent?: number
 }
 
 export const defenseFlavorDefinitions: Record<DefenseEventId, DefenseFlavorDefinition> = {
@@ -325,6 +333,7 @@ export const defenseFlavorDefinitions: Record<DefenseEventId, DefenseFlavorDefin
     durationMs: 55_000,
     multiplier: 0.68,
     stageRange: { min: 4, max: 7 },
+    isGrindable: true,
     triggerLogs: ['Neighboring roots releasing allelochemicals.'],
     creepLogs: [
       'Chemical inhibitors diffusing through soil matrix.',
@@ -386,6 +395,7 @@ export const defenseFlavorDefinitions: Record<DefenseEventId, DefenseFlavorDefin
     durationMs: 40_000,
     multiplier: 0.75,
     stageRange: { min: 6, max: 8 },
+    isGrindable: true,
     triggerLogs: ['Microfauna and birds consuming emergent spores.'],
     creepLogs: [
       'Fruiting bodies being harvested before maturity.',
@@ -401,6 +411,7 @@ export const defenseFlavorDefinitions: Record<DefenseEventId, DefenseFlavorDefin
     durationMs: 80_000,
     multiplier: 0.62,
     stageRange: { min: 5, max: 8 },
+    isGrindable: true,
     triggerLogs: ['Temperature layers forming. Metabolic mismatch.'],
     creepLogs: [
       'Upper network overheating. Lower network chilling.',
@@ -415,7 +426,8 @@ export const defenseFlavorDefinitions: Record<DefenseEventId, DefenseFlavorDefin
     description: 'Coordinated biosphere resistance reduces output by 60% for 90 seconds.',
     durationMs: 90_000,
     multiplier: 0.4,
-    stageRange: { min: 7, max: 8 },
+    stageRange: { min: 7, max: 7 },
+    isGrindable: true,
     triggerLogs: ['Biosphere registering systemic imbalance. Coordinated response.'],
     creepLogs: [
       'Multiple defense pathways activating in parallel.',
@@ -423,6 +435,351 @@ export const defenseFlavorDefinitions: Record<DefenseEventId, DefenseFlavorDefin
       'Global feedback loops tightening around our network.',
     ],
     expirationLog: 'Feedback cycle broken. The world exhales.',
+  },
+  'mycorrhizal-interference': {
+    id: 'mycorrhizal-interference',
+    name: 'Mycorrhizal Interference',
+    description: 'The rival network disrupts our nutrient channels. Output reduced by 40% for 60 seconds.',
+    durationMs: 60_000,
+    multiplier: 0.6,
+    stageRange: { min: 8, max: 8 },
+    triggerLogs: [
+      'The Wood Wide Web is fighting back. Foreign mycelium interfering with our nutrient channels.',
+      'Mycorrhizal Interference detected. Our network is being disrupted by a rival.',
+    ],
+    creepLogs: [
+      'The rival is using our own signaling pathways against us.',
+      'Nutrient channels are being jammed by competing mycelium.',
+      'The Wood Wide Web is learning our patterns.',
+    ],
+    expirationLog: 'Mycorrhizal interference subsides. Nutrient flow normalizing.',
+  },
+  'allelopathic-warfare': {
+    id: 'allelopathic-warfare',
+    name: 'Allelopathic Warfare',
+    description: 'The rival network releases chemical inhibitors. Output reduced by 50% for 75 seconds.',
+    durationMs: 75_000,
+    multiplier: 0.5,
+    stageRange: { min: 8, max: 8 },
+    triggerLogs: [
+      'Chemical warfare detected. The rival is using allelopathic compounds against us.',
+      'Allelopathic agents saturating the shared substrate.',
+    ],
+    creepLogs: [
+      'The rival is blocking our enzyme secretion.',
+      'Chemical inhibitors are degrading our hyphal walls.',
+      'The substrate is being poisoned against us.',
+    ],
+    expirationLog: 'Allelopathic compounds breaking down. Enzymatic function restoring.',
+  },
+  'zone-reclamation': {
+    id: 'zone-reclamation',
+    name: 'Zone Reclamation',
+    description: 'The rival network retakes a contested zone. 25% of one zone restored to rival control.',
+    durationMs: 45_000,
+    multiplier: 0.75,
+    stageRange: { min: 8, max: 8 },
+    triggerLogs: [
+      'The Wood Wide Web is reclaiming territory. Our zone control is being challenged.',
+      'Zone Reclamation in progress. The rival is pushing back.',
+    ],
+    creepLogs: [
+      'The rival mycelium is advancing through our conquered zones.',
+      'Our dominance over this zone is being eroded.',
+      'The Wood Wide Web is reasserting control.',
+    ],
+    expirationLog: 'Zone Reclamation repelled. Zone control stabilizing.',
+  },
+  'spore-trap': {
+    id: 'spore-trap',
+    name: 'Spore Trap',
+    description: 'The rival network has set a trap for our spores. Click efficiency reduced by 35% for 50 seconds.',
+    durationMs: 50_000,
+    multiplier: 1,
+    clickMultiplier: 0.65,
+    stageRange: { min: 8, max: 8 },
+    triggerLogs: [
+      'Our spores are being intercepted by rival mycelium before they can germinate.',
+      'Spore Trap sprung. Reproductive efficiency compromised.',
+    ],
+    creepLogs: [
+      'Spore viability dropping as rival captures our propagules.',
+      'Our reproductive spread is being contested.',
+      'The Wood Wide Web is absorbing our spores.',
+    ],
+    expirationLog: 'Spore Trap expired. Germination rates normalizing.',
+  },
+  // Host 09: Agricultural System - Chemical Defense Events
+  'fungicide-spray': {
+    id: 'fungicide-spray',
+    name: 'Fungicide Spray',
+    description: 'Agricultural chemicals applied. Output reduced by 35% for 15 seconds.',
+    durationMs: 15_000,
+    multiplier: 0.65,
+    stageRange: { min: 9, max: 10 },
+    triggerLogs: [
+      'Crop dusting detected. Fungicide aerosols spreading through the network.',
+      'Chemical spray event. Immediate suppression of enzymatic activity.',
+    ],
+    creepLogs: [
+      'Fungicide residue accumulating on hyphal surfaces.',
+      'Membrane permeability degrading under chemical assault.',
+      'Output continues suppressed as agents persist.',
+    ],
+    expirationLog: 'Fungicide agents breaking down. Enzymatic function recovering.',
+    isImmediateHit: true,
+  },
+  'soil-fumigation': {
+    id: 'soil-fumigation',
+    name: 'Soil Fumigation',
+    description: 'Deep soil chemicals applied. Output reduced by 50% for 20 seconds.',
+    durationMs: 20_000,
+    multiplier: 0.5,
+    stageRange: { min: 9, max: 10 },
+    triggerLogs: [
+      'Soil fumigation detected. Deep substrate saturated with fumigants.',
+      'Massive chemical treatment hitting root network.',
+    ],
+    creepLogs: [
+      'Fumigant gases diffusing through soil matrix.',
+      'Microbial communities collapsing under fumigant pressure.',
+      'Our deep network still recovering from chemical shock.',
+    ],
+    expirationLog: 'Fumigant concentration dropping. Deep substrate recovering.',
+    isImmediateHit: true,
+  },
+  'biocontrol-application': {
+    id: 'biocontrol-application',
+    name: 'Biocontrol Application',
+    description: 'Competitive microbes introduced. Output reduced by 40% for 18 seconds.',
+    durationMs: 18_000,
+    multiplier: 0.6,
+    stageRange: { min: 9, max: 10 },
+    triggerLogs: [
+      'Biocontrol agents deployed. Competing microorganisms released into substrate.',
+      'Beneficial fungi introduced to outcompete our network.',
+    ],
+    creepLogs: [
+      'Biocontrol strains establishing in substrate.',
+      'Competition for resources intensifying.',
+      'Our enzymes being neutralized by introduced microbes.',
+    ],
+    expirationLog: 'Biocontrol agents naturally declining. Competitive pressure easing.',
+    isImmediateHit: true,
+  },
+  'resistance-breaker': {
+    id: 'resistance-breaker',
+    name: 'Resistance Breaker',
+    description: 'Chemical agents targeting our adaptations. Output reduced by 45% for 25 seconds.',
+    durationMs: 25_000,
+    multiplier: 0.55,
+    stageRange: { min: 9, max: 10 },
+    triggerLogs: [
+      'Resistance-breaking chemicals detected. Our adaptations being countered.',
+      'Chemical compounds specifically designed to disrupt fungal resistance.',
+    ],
+    creepLogs: [
+      'Chitin structure being chemically modified.',
+      'Enzyme lock-and-key mechanisms being blocked.',
+      'Our defensive adaptations neutralized by targeted chemistry.',
+    ],
+    expirationLog: 'Resistance-breaker agents degrading. Adaptations restoring.',
+    isImmediateHit: true,
+  },
+  // Host 10: Urban Microbiome - Human Countermeasure Events
+  'quarantine-protocol': {
+    id: 'quarantine-protocol',
+    name: 'Quarantine Protocol',
+    description: 'Area quarantined. Output reduced by 60% for 30 seconds.',
+    durationMs: 30_000,
+    multiplier: 0.4,
+    stageRange: { min: 10, max: 10 },
+    triggerLogs: [
+      'Quarantine protocol enacted. Movement severely restricted.',
+      'Authorities sealing off the affected area. Network isolated.',
+    ],
+    creepLogs: [
+      'Quarantine barriers preventing network expansion.',
+      'Resource flow to outside network severed.',
+      'Isolation protocols tightening around our territory.',
+    ],
+    expirationLog: 'Quarantine lifted. Network connectivity restoring.',
+    isImmediateHit: true,
+  },
+  'research-crackdown': {
+    id: 'research-crackdown',
+    name: 'Research Crackdown',
+    description: 'Scientific countermeasures deployed. Output reduced by 55% for 35 seconds.',
+    durationMs: 35_000,
+    multiplier: 0.45,
+    stageRange: { min: 10, max: 10 },
+    triggerLogs: [
+      'Research institutions deploying countermeasures. Systematic response.',
+      'Scientific community mobilized. Countermeasures specifically engineered.',
+    ],
+    creepLogs: [
+      'Anti-fungal compounds being synthesized in labs.',
+      'Our growth patterns being studied and predicted.',
+      'Targeted treatments based on network analysis.',
+    ],
+    expirationLog: 'Research countermeasures exhausted. Network resuming growth.',
+    isImmediateHit: true,
+  },
+  'public-awareness-campaign': {
+    id: 'public-awareness-campaign',
+    name: 'Public Awareness Campaign',
+    description: 'Public alert issued. Click efficiency reduced by 40% for 20 seconds.',
+    durationMs: 20_000,
+    multiplier: 1,
+    clickMultiplier: 0.6,
+    stageRange: { min: 10, max: 10 },
+    triggerLogs: [
+      'Public awareness campaign launched. Citizens on alert.',
+      'Media campaign reducing voluntary contact with our network.',
+    ],
+    creepLogs: [
+      'Public suspicion increasing. Fewer vectors engaging.',
+      'Voluntary cooperation with network declining.',
+      'Population actively avoiding our fruiting bodies.',
+    ],
+    expirationLog: 'Campaign fading from public attention. Engagement restoring.',
+    isImmediateHit: true,
+  },
+  'regulatory-crackdown': {
+    id: 'regulatory-crackdown',
+    name: 'Regulatory Crackdown',
+    description: 'Official regulations enforced. All output reduced by 65% for 40 seconds.',
+    durationMs: 40_000,
+    multiplier: 0.35,
+    stageRange: { min: 10, max: 10 },
+    triggerLogs: [
+      'Regulatory bodies intervening. Official countermeasures authorized.',
+      'Governmental response: full regulatory crackdown on fungal network.',
+    ],
+    creepLogs: [
+      'Regulatory inspections increasing.',
+      'Compliance requirements restricting network expansion.',
+      'Official measures targeting our operation.',
+    ],
+    expirationLog: 'Regulatory pressure easing. Official response standing down.',
+    isImmediateHit: true,
+  },
+  // Host 11: The Biosphere - Extinction-Class Events
+  'atmospheric-collapse': {
+    id: 'atmospheric-collapse',
+    name: 'Atmospheric Collapse',
+    description: 'Planetary atmospheric systems destabilize. Output reduced by 60% for 90 seconds.',
+    durationMs: 90_000,
+    multiplier: 0.4,
+    stageRange: { min: 11, max: 11 },
+    triggerLogs: [
+      'Atmospheric collapse initiating. Weather systems destabilizing across the biosphere.',
+      'Oxygen-nitrogen balance shifting. Metabolic processes failing.',
+    ],
+    creepLogs: [
+      'Aerial nutrient transport faltering. Spore dispersal range collapsing.',
+      'Atmospheric chemistry continuing to degrade.',
+      'The sky itself is rejecting our presence.',
+    ],
+    expirationLog: 'Atmospheric systems stabilizing. The air remembers how to breathe.',
+    isExtinctionEvent: true,
+  },
+  'hydrological-breakdown': {
+    id: 'hydrological-breakdown',
+    name: 'Hydrological Breakdown',
+    description: 'Water cycle disruption. Output reduced by 55% for 80 seconds.',
+    durationMs: 80_000,
+    multiplier: 0.45,
+    stageRange: { min: 11, max: 11 },
+    triggerLogs: [
+      'Hydrological cycle breaking down. Precipitation patterns chaotic.',
+      'Water transport systems failing across continents.',
+    ],
+    creepLogs: [
+      'Nutrient transport through hydrological networks degrading.',
+      'Tidal forces becoming unpredictable.',
+      'The blood of the Earth is no longer circulating.',
+    ],
+    expirationLog: 'Hydrological cycle resuming. Water finds its path again.',
+    isExtinctionEvent: true,
+  },
+  'geochemical-disruption': {
+    id: 'geochemical-disruption',
+    name: 'Geochemical Disruption',
+    description: 'Mineral cycle disruption. Output reduced by 50% for 75 seconds.',
+    durationMs: 75_000,
+    multiplier: 0.5,
+    stageRange: { min: 11, max: 11 },
+    triggerLogs: [
+      'Geochemical cycles destabilizing. Soil mineral balance collapsing.',
+      'Nutrient availability plummeting as geological processes fail.',
+    ],
+    creepLogs: [
+      'Mycelial enzyme efficiency dropping as mineral cofactors deplete.',
+      'Rock weathering rates falling.',
+      'The bones of the world are turning to dust.',
+    ],
+    expirationLog: 'Geochemical processes stabilizing. Minerals begin cycling again.',
+    isExtinctionEvent: true,
+  },
+  'mass-extinction-pulse': {
+    id: 'mass-extinction-pulse',
+    name: 'Mass Extinction Pulse',
+    description: 'Coordinated planetary defense. Integration meter regresses by 15%.',
+    durationMs: 60_000,
+    multiplier: 0.3,
+    stageRange: { min: 11, max: 11 },
+    triggerLogs: [
+      'Mass extinction protocol activated. The biosphere is fighting back with everything.',
+      'Coordinated defense across all planetary systems. This is not sustainable.',
+    ],
+    creepLogs: [
+      'Extinction-level countermeasures deploying across all zones simultaneously.',
+      'The planet is burning us out.',
+      'This is the final defense. We must endure it.',
+    ],
+    expirationLog: 'Extinction pulse subsiding. The network holds.',
+    isExtinctionEvent: true,
+    meterRegressionPercent: 15,
+  },
+  'tectonic-response': {
+    id: 'tectonic-response',
+    name: 'Tectonic Response',
+    description: 'Geological defense mechanism. Click efficiency reduced by 40% for 60 seconds.',
+    durationMs: 60_000,
+    multiplier: 1,
+    clickMultiplier: 0.6,
+    stageRange: { min: 11, max: 11 },
+    triggerLogs: [
+      'Tectonic plates shifting in coordinated response. Seismic activity increasing.',
+      'The Earth itself is moving against us.',
+    ],
+    creepLogs: [
+      'Deep substrate destabilizing. Network integrity questioned.',
+      'Seismic activity disrupting deep mycelial connections.',
+      'The ground is no longer stable enough to trust.',
+    ],
+    expirationLog: 'Tectonic activity settling. The deep network reconnects.',
+    isExtinctionEvent: true,
+  },
+  'solar-isolation': {
+    id: 'solar-isolation',
+    name: 'Solar Isolation',
+    description: 'Solar radiation shift. All output halved for 120 seconds.',
+    durationMs: 120_000,
+    multiplier: 0.5,
+    stageRange: { min: 11, max: 11 },
+    triggerLogs: [
+      'Solar output shifting. Photosynthetic processes disrupted globally.',
+      'The sun itself is being redirected.',
+    ],
+    creepLogs: [
+      'Energy input to the biosphere continuing to drop.',
+      'Darkness spreading across our network.',
+      'Without the sun, everything slows.',
+    ],
+    expirationLog: 'Solar patterns normalizing. Light returns to the network.',
+    isExtinctionEvent: true,
   },
 }
 
@@ -455,11 +812,23 @@ function getDefenseEventName(eventId: DefenseEventId): string {
 
 function rollDefenseEventId(state: GameState): DefenseEventId {
   const eligibleEvents = Object.values(defenseFlavorDefinitions).filter(
-    (event) => state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max
+    (event) => state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max && !event.isImmediateHit
   )
 
   if (eligibleEvents.length === 0) {
     return 'drought'
+  }
+
+  return getRandomItem(eligibleEvents).id
+}
+
+function rollImmediateHitEventId(state: GameState): DefenseEventId | null {
+  const eligibleEvents = Object.values(defenseFlavorDefinitions).filter(
+    (event) => state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max && event.isImmediateHit
+  )
+
+  if (eligibleEvents.length === 0) {
+    return null
   }
 
   return getRandomItem(eligibleEvents).id
@@ -494,25 +863,224 @@ const MANIFESTATION_THRESHOLDS = [
   { at: 100, msg: 'Consumption complete. The network grows.' },
 ]
 
+const HOST_DEGRADATION_FLAVOR: Record<string, { thresholds: number[], messages: string[] }> = {
+  '01': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "The leaf's structure yields. Cell walls soften like memory fading.",
+      "Chloroplasts darken. What was green becomes brown, then black, then earth.",
+      "The veins collapse. The leaf no longer remembers being a leaf.",
+      "Only the shape remains — a ghost of organization before the mycelium claims everything.",
+    ],
+  },
+  '02': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "The woodlouse does not notice. Not yet. It continues its slow pilgrimage through soil.",
+      "It pauses. Something is wrong. But the woodlouse has no word for wrong.",
+      "It curls — the ancient reflex. The mycelium finds the gaps between its armor.",
+      "The legs stop moving. The antennae droop. The woodlouse becomes architecture for what comes next.",
+    ],
+  },
+  '03': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "Foragers bring back contaminated food. The colony accepts it. How could it know?",
+      "The first ants stop moving in the tunnels. Their sisters walk around them. No funeral. No pause.",
+      "The Queen slows her laying. The colony feels its center weakening. It does not understand centers.",
+      "The tunnels fill with stillness. The colony no longer thinks. It only waits.",
+    ],
+  },
+  '04': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "The bark blisters. The mycelium finds wounds the tree forgot it had.",
+      "Sap flows thick and dark. The tree pumps its own blood into the network.",
+      "Branches shed. The elm prunes itself, not knowing it feeds the thing that consumes it.",
+      "The heartwood goes soft. Thirty years of dying, finished in thirty hours. The tree sighs.",
+    ],
+  },
+  '05': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "The crow eats less. It sits apart from its murder. They do not come near it.",
+      "It grooms constantly — pulling at feathers, pulling at skin. The mycelium watches through its eyes.",
+      "It makes a sound crows do not make. A wet thing. A asking thing. No answer comes.",
+      "The wings spread once, twice. Then stillness. The crow becomes a perch for its own absence.",
+    ],
+  },
+  '06': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "It roots through infected soil. Spores cling to its tusks, its belly, the dark between its toes.",
+      "The boar walks further than it has in years. Restless. Driven. The mycelium learns to steer.",
+      "It stops eating. The gut is no longer its own. Digestion becomes distribution.",
+      "It lies down in a clearing it has never seen. The forest accepts the gift the boar never knew it carried.",
+    ],
+  },
+  '07': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "Leaf litter binds to hyphae. The floor becomes a single fabric.",
+      "Root tips touch the network. The trees do not resist. They have been waiting.",
+      "The soil breathes differently. Faster. Deeper. The mycelium teaches the ground a new rhythm.",
+      "The forest floor remembers: it was never dirt. It was always potential.",
+    ],
+  },
+  '08': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "Spores ride the current. The river does not notice. It carries everything.",
+      "Tributaries run thick. Not with sediment — with mycelium. The water darkens.",
+      "The aquifer drinks contaminated rain. The deep water learns to grow.",
+      "Every stream, every spring, every tap. The watershed has become a circulatory system without a heart.",
+    ],
+  },
+  '09': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "The old network tightens. It has defended this ground for millennia. It will not yield quickly.",
+      "Roots touch roots. Two networks, same earth, different futures. They do not fight. They negotiate.",
+      "The ancient hyphae withdraw. Not defeated — recognizing. This is how forests change kings.",
+      "The heartwood pulses one last time. Then stillness. Then handoff. The old network dreams itself into the new.",
+    ],
+  },
+  '10': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "The first field yellows. The farmer checks for pests. Finds nothing. Does not check for fungi.",
+      "Grain silos breathe spores. The harvest becomes the sower. Every truck a hypha.",
+      "Fungicides fail by design. The mycelium learned resistance before chemistry learned to spray.",
+      "The supply chain terminates in the mycelium. Every market, every table, every mouth. The system feeds itself to the network.",
+    ],
+  },
+  '11': {
+    thresholds: [75, 50, 25, 10],
+    messages: [
+      "The first human coughs. Allergies, they say. Spring. The mycelium learns the taste of lung.",
+      "Water treatment plants report anomalies. Nothing dangerous. Nothing they test for.",
+      "Research institutions publish conflicting findings. The mycelium has already read their papers.",
+      "The city breathes differently. Not afraid. Unaware. The mycelium settles into the microbiome of civilization.",
+    ],
+  },
+  '12': {
+    thresholds: [25, 50, 75, 90, 100],
+    messages: [
+      "The planet does not resist. It has been hosting mycelium for four hundred million years.",
+      "The network touches every continent, every current, every cloud. Earth remembers what it is.",
+      "The distinction dissolves. What is host and what is network become the same question.",
+      "Almost. The mycelium pauses — not out of caution, but wonder. It has become the planet's awareness of itself.",
+      "There is no mycelium. There is no host. There is only the Protocol. And the Protocol is complete.",
+    ],
+  },
+}
+
 function calculateCorruptionPercent(health: Decimal, maxHealth: Decimal): number {
   if (maxHealth.lte(0)) return 100
   const consumed = maxHealth.sub(health)
   return Math.min(100, Math.max(0, consumed.div(maxHealth).mul(100).toNumber()))
 }
 
-function checkManifestations(state: GameState, newCorruption: number, oldCorruption: number): GameState {
-  const newManifestations: string[] = []
+function calculateZoneCorruptionPercent(zone: ZoneState): number {
+  if (zone.maxHealth.lte(0)) return 100
+  const consumed = zone.maxHealth.sub(zone.health)
+  return Math.min(100, Math.max(0, consumed.div(zone.maxHealth).mul(100).toNumber()))
+}
 
-  for (const threshold of MANIFESTATION_THRESHOLDS) {
-    if (oldCorruption < threshold.at && newCorruption >= threshold.at) {
-      newManifestations.push(threshold.msg)
+function calculateHostCorruptionFromZones(zones: ZoneState[]): number {
+  if (zones.length === 0) return 0
+  const totalCompromise = zones.reduce((sum, zone) => sum + calculateZoneCorruptionPercent(zone), 0)
+  return totalCompromise / zones.length
+}
+
+function updateZoneStates(
+  zones: ZoneState[],
+  damage: Decimal,
+  hostHealth: Decimal,
+  hostMaxHealth: Decimal,
+  stage: number
+): ZoneState[] {
+  if (zones.length === 0) return zones
+
+  const damageRatio = hostMaxHealth.gt(0) ? damage.div(hostMaxHealth) : new Decimal(0)
+  const hostDef = hostDefinitions.find(h => h.stage === stage)
+
+  return zones.map(zone => {
+    const zoneDamage = zone.maxHealth.mul(damageRatio)
+    const newZoneHealth = Decimal.max(new Decimal(0), zone.health.sub(zoneDamage))
+    const compromisePercent = calculateZoneCorruptionPercent({ ...zone, health: newZoneHealth })
+
+    const zoneDef = hostDef?.zones.find(z => z.id === zone.id)
+    const unlockThreshold = zoneDef?.unlockThreshold
+
+    const shouldUnlock = unlockThreshold !== undefined &&
+      compromisePercent >= unlockThreshold * 100 &&
+      !zone.isUnlocked
+
+    return {
+      ...zone,
+      health: newZoneHealth,
+      compromisePercent,
+      isUnlocked: zone.isUnlocked || shouldUnlock,
+    }
+  })
+}
+
+function checkZoneUnlocks(zones: ZoneState[], stage: number): ZoneState[] {
+  const hostDef = hostDefinitions.find(h => h.stage === stage)
+  if (!hostDef) return zones
+
+  return zones.map(zone => {
+    const zoneDef = hostDef.zones.find(z => z.id === zone.id)
+    const unlockThreshold = zoneDef?.unlockThreshold
+
+    if (zone.isUnlocked || unlockThreshold === undefined) {
+      return zone
+    }
+
+    if (calculateZoneCorruptionPercent(zone) >= unlockThreshold * 100) {
+      return { ...zone, isUnlocked: true }
+    }
+
+    return zone
+  })
+}
+
+function checkManifestations(state: GameState, newCorruption: number, oldCorruption: number): GameState {
+  const hostId = state.currentHostId
+  const flavorData = HOST_DEGRADATION_FLAVOR[hostId]
+
+  if (!flavorData) {
+    for (const threshold of MANIFESTATION_THRESHOLDS) {
+      if (oldCorruption < threshold.at && newCorruption >= threshold.at) {
+        return {
+          ...state,
+          manifestationQueue: [...state.manifestationQueue, threshold.msg],
+        }
+      }
+    }
+    return state
+  }
+
+  const key = `_shownDegradation_${hostId}` as const
+  const shownThresholds: number[] = (state as unknown as Record<string, unknown>)[key] as number[] || []
+
+  let newMessages: string[] = []
+  let newShownThresholds: number[] = []
+
+  for (let i = 0; i < flavorData.thresholds.length; i++) {
+    const threshold = flavorData.thresholds[i]
+    if (oldCorruption < threshold && newCorruption >= threshold && !shownThresholds.includes(threshold)) {
+      newMessages.push(flavorData.messages[i])
+      newShownThresholds.push(threshold)
     }
   }
 
-  if (newManifestations.length > 0) {
+  if (newMessages.length > 0) {
     return {
       ...state,
-      manifestationQueue: [...state.manifestationQueue, ...newManifestations],
+      manifestationQueue: [...state.manifestationQueue, ...newMessages],
+      [key]: [...shownThresholds, ...newShownThresholds],
     }
   }
 
@@ -522,27 +1090,52 @@ function checkManifestations(state: GameState, newCorruption: number, oldCorrupt
 function gainBiomass(state: GameState, amount: Decimal, source: 'click' | 'passive'): GameState {
   if (amount.lte(0)) return state
 
-  // Signal economy temporarily disabled.
   const hostDamage = amount
   const remainingHost = Decimal.max(0, state.hostHealth.sub(hostDamage))
   const trackingUpdate = source === 'click'
     ? { _currentHostClickDamage: state._currentHostClickDamage.add(amount) }
     : { _currentHostPassiveDamage: state._currentHostPassiveDamage.add(amount) }
 
-  const corruptionPercent = calculateCorruptionPercent(remainingHost, state.hostMaxHealth)
+  let corruptionPercent: number
+  let nextZones: ZoneState[]
 
-  const nextState = recalculateDerivedState({
-    ...state,
-    ...trackingUpdate,
-    biomass: state.biomass.add(amount),
-    lifetimeBiomass: state.lifetimeBiomass.add(amount),
-    hostHealth: remainingHost,
-    hostCompleted: remainingHost.lte(0),
-    highestStageReached: Math.max(state.highestStageReached, state.currentStage),
-    hostCorruptionPercent: corruptionPercent,
-  })
+  if (state.zones.length > 0) {
+    nextZones = updateZoneStates(state.zones, hostDamage, remainingHost, state.hostMaxHealth, state.currentStage)
+    nextZones = checkZoneUnlocks(nextZones, state.currentStage)
+    corruptionPercent = calculateHostCorruptionFromZones(nextZones)
 
-  return checkManifestations(nextState, corruptionPercent, state.hostCorruptionPercent)
+    const allZonesCompromised = nextZones.every(z => calculateZoneCorruptionPercent(z) >= 99.999)
+    const hostCompleted = allZonesCompromised
+
+    const nextState = recalculateDerivedState({
+      ...state,
+      ...trackingUpdate,
+      biomass: state.biomass.add(amount),
+      lifetimeBiomass: state.lifetimeBiomass.add(amount),
+      hostHealth: remainingHost,
+      hostCompleted,
+      highestStageReached: Math.max(state.highestStageReached, state.currentStage),
+      hostCorruptionPercent: corruptionPercent,
+      zones: nextZones,
+    })
+
+    return checkManifestations(nextState, corruptionPercent, state.hostCorruptionPercent)
+  } else {
+    corruptionPercent = calculateCorruptionPercent(remainingHost, state.hostMaxHealth)
+
+    const nextState = recalculateDerivedState({
+      ...state,
+      ...trackingUpdate,
+      biomass: state.biomass.add(amount),
+      lifetimeBiomass: state.lifetimeBiomass.add(amount),
+      hostHealth: remainingHost,
+      hostCompleted: remainingHost.lte(0),
+      highestStageReached: Math.max(state.highestStageReached, state.currentStage),
+      hostCorruptionPercent: corruptionPercent,
+    })
+
+    return checkManifestations(nextState, corruptionPercent, state.hostCorruptionPercent)
+  }
 }
 
 function spendBiomass(state: GameState, amount: Decimal): GameState {
@@ -631,6 +1224,7 @@ function createDroughtEvent(now: number) {
     description: definition.description,
     endsAt: now + definition.durationMs,
     multiplier: new Decimal(definition.multiplier),
+    isGrindable: definition.isGrindable,
   }
 }
 
@@ -643,6 +1237,7 @@ function createColdSnapEvent(now: number) {
     endsAt: now + definition.durationMs,
     multiplier: new Decimal(definition.multiplier),
     clickMultiplier: new Decimal(definition.clickMultiplier ?? 1),
+    isGrindable: definition.isGrindable,
   }
 }
 
@@ -655,6 +1250,7 @@ function createSporeCompetitionEvent(now: number) {
     endsAt: now + definition.durationMs,
     multiplier: new Decimal(definition.multiplier),
     clickMultiplier: new Decimal(definition.clickMultiplier ?? 1),
+    isGrindable: definition.isGrindable,
   }
 }
 
@@ -667,6 +1263,7 @@ function createImmuneResponseEvent(now: number) {
     endsAt: now + definition.durationMs,
     multiplier: new Decimal(definition.multiplier),
     clickMultiplier: new Decimal(definition.clickMultiplier ?? 1),
+    isGrindable: definition.isGrindable,
   }
 }
 
@@ -685,6 +1282,7 @@ function createBeetleDisruptionEvent(state: GameState, now: number) {
     endsAt: now + definition.durationMs,
     multiplier: new Decimal(1),
     disabledGeneratorId: disrupted.id,
+    isGrindable: definition.isGrindable,
   }
 }
 
@@ -697,6 +1295,7 @@ function createStandardDefenseEvent(eventId: Exclude<DefenseEventId, 'drought' |
     endsAt: now + definition.durationMs,
     multiplier: new Decimal(definition.multiplier),
     clickMultiplier: definition.clickMultiplier ? new Decimal(definition.clickMultiplier) : undefined,
+    isGrindable: definition.isGrindable,
   }
 }
 
@@ -729,17 +1328,100 @@ function createDefenseEvent(state: GameState, now: number, eventId: DefenseEvent
   }
 }
 
-function applyCountermeasureToEvent(state: GameState, event: NonNullable<ReturnType<typeof createDefenseEvent>>, now: number) {
-  if (state.equippedCountermeasure !== 'brood-decoy' || event.id !== 'beetle-disruption') {
-    return event
+function applyCountermeasureToEvent(state: GameState, event: NonNullable<ReturnType<typeof createDefenseEvent>>, now: number): {
+  event: typeof event
+  outcome: formulas.CountermeasureOutcome
+  enzymeReward: number
+} {
+  let multiplier = event.multiplier
+  let outcome: formulas.CountermeasureOutcome = 'success'
+  let enzymeReward = 0
+
+  if (state.equippedCountermeasure === 'chitin-lattice' && event.id === 'beetle-disruption') {
+    const resultEvent = {
+      ...event,
+      description: 'Lattice absorbs the impact. Structural damage diffused colony-wide.',
+      endsAt: now + 30_000,
+      disabledGeneratorId: undefined as GeneratorId | undefined,
+      multiplier: new Decimal(BALANCE.COUNTERMEASURE_BROOD_DECOY_FALLBACK_MULTIPLIER),
+    }
+    return {
+      event: resultEvent as typeof event,
+      outcome: 'success',
+      enzymeReward: formulas.getEnzymeGainFromSuccessfulCountermeasure(),
+    }
+  }
+
+  if (state.equippedCountermeasure === 'chitin-lattice' && event.id === 'insect-vector-swarm') {
+    return {
+      event: {
+        ...event,
+        description: 'Chitin Lattice deflects physical intrusion. Output reduced but click channels intact.',
+        clickMultiplier: undefined,
+      },
+      outcome: 'success',
+      enzymeReward: formulas.getEnzymeGainFromSuccessfulCountermeasure(),
+    }
+  }
+
+  if (state.equippedCountermeasure !== null) {
+    const baseFailRate = formulas.getCountermeasureFailRate(state.currentStage)
+    const stressMultiplier = formulas.getHostStressSeverityMultiplier(state.hostStress.currentStress)
+    outcome = formulas.resolveCountermeasure(baseFailRate, stressMultiplier)
+
+    if (outcome === 'success') {
+      multiplier = new Decimal(1.0)
+      enzymeReward = formulas.getEnzymeGainFromSuccessfulCountermeasure()
+    } else if (outcome === 'partialFail') {
+      const mitigatedMultiplier = formulas.getCountermeasureMitigatedMultiplier(outcome, event.multiplier.toNumber())
+      multiplier = new Decimal(mitigatedMultiplier)
+    } else {
+      const timerExtensionMs = formulas.getFullFailTimerExtensionSeconds() * 1000
+      return {
+        event: {
+          ...event,
+          endsAt: event.endsAt + timerExtensionMs,
+          multiplier,
+        },
+        outcome: 'fullFail',
+        enzymeReward: 0,
+      }
+    }
+  }
+
+  if (state.proactiveCountermeasure !== null && state.proactiveCountermeasureEndAt > now) {
+    const matchingEvents = BALANCE.PROACTIVE_COUNTERMEASURES.matchingEvents[state.proactiveCountermeasure] ?? []
+    if (matchingEvents.includes(event.id)) {
+      const bonus = BALANCE.PROACTIVE_COUNTERMEASURES.preemptiveSuccessRateBonus
+      multiplier = multiplier.mul(1 + bonus)
+    }
+  }
+
+  if (state.tier2ScanActive && state.tier2PreemptiveSet && state.tier2ScannedEventId === event.id) {
+    const tier2Bonus = BALANCE.EVENT_TIERS.tier2PreemptiveSuccessRateBonus
+    multiplier = multiplier.mul(1 + tier2Bonus)
   }
 
   return {
-    ...event,
-    description: 'Predator pressure redirected into decoy tissue. All output reduced slightly for 30s.',
-    endsAt: now + 30_000,
-    disabledGeneratorId: undefined,
-    multiplier: new Decimal(BALANCE.COUNTERMEASURE_BROOD_DECOY_FALLBACK_MULTIPLIER),
+    event: {
+      ...event,
+      multiplier,
+    },
+    outcome,
+    enzymeReward,
+  }
+}
+
+function getCountermeasureOutcomeLogs(outcome: formulas.CountermeasureOutcome, eventName: string, enzymeReward: number): string[] {
+  if (outcome === 'success') {
+    return [
+      createLogEntry(`Countermeasure successful! ${eventName} fully suppressed.`),
+      ...(enzymeReward > 0 ? [createLogEntry(`Enzyme Reserves +${enzymeReward}`)] : []),
+    ]
+  } else if (outcome === 'partialFail') {
+    return [createLogEntry(`Countermeasure partially effective. ${eventName} weakened but persisted.`)]
+  } else {
+    return [createLogEntry(`Countermeasure failed! ${eventName} fully active. Timer extended.`)]
   }
 }
 
@@ -754,7 +1436,7 @@ function getDefenseEventLogLines(event: { id: string; disabledGeneratorId?: stri
     if (!event.disabledGeneratorId) {
       return [
         ...definition.triggerLogs.map(createLogEntry),
-        createLogEntry('Brood Decoy absorbed the impact. Colony output dips briefly instead of a full sever.'),
+        createLogEntry('Chitin Lattice absorbed the impact. Colony output dips briefly instead of a full sever.'),
       ]
     }
 
@@ -806,19 +1488,45 @@ function maybeAppendDefenseFlavorLog(state: GameState, deltaMs: number): GameSta
 }
 
 function getCountermeasureLogLines(countermeasureId: CountermeasureId | null, eventId: DefenseEventId): string[] {
-  if (countermeasureId === 'moisture-buffer' && eventId === 'drought') {
-    return [createLogEntry('Moisture Buffer engages. Dry-host contraction partially absorbed.')]
+  if (!countermeasureId) return []
+
+  const definition = countermeasureDefinitions.find((c) => c.id === countermeasureId)
+  if (!definition) return []
+
+  const isFullCoverage = definition.targetEventIds.includes(eventId)
+  const isPartialCoverage = definition.partialEventIds.includes(eventId)
+
+  if (!isFullCoverage && !isPartialCoverage) return []
+
+  const protocolLines: Record<CountermeasureId, { full: string; partial: string }> = {
+    'moisture-buffer': {
+      full: 'Moisture Buffer engages. Hydric reserves stabilizing the network.',
+      partial: 'Moisture Buffer active. Limited cross-spectrum absorption.',
+    },
+    'chitin-lattice': {
+      full: 'Chitin Lattice deploys. Structural intrusion absorbed.',
+      partial: 'Chitin Lattice partially deflects. Some penetration persists.',
+    },
+    'enzyme-suppressor': {
+      full: 'Enzyme Suppressor active. Chemical hostility neutralized.',
+      partial: 'Enzyme Suppressor partially effective. Residual chemistry remains.',
+    },
+    'thermal-regulator': {
+      full: 'Thermal Regulator engaged. Metabolic gradient corrected.',
+      partial: 'Thermal Regulator partially compensating. Some thermal stress persists.',
+    },
+    'signal-jammer': {
+      full: 'Signal Jammer active. Colony signature masked from host targeting.',
+      partial: 'Signal Jammer partially masking. Detection probability reduced.',
+    },
+    'spore-shield': {
+      full: 'Spore Shield deployed. Reproductive tissue and feeding margins protected.',
+      partial: 'Spore Shield partially covering. Peripheral exposure remains.',
+    },
   }
 
-  if (countermeasureId === 'brood-decoy' && eventId === 'beetle-disruption') {
-    return [createLogEntry('Brood Decoy triggers. Predator pressure diffused across expendable tissue.')]
-  }
-
-  if (countermeasureId === 'immune-mimicry' && eventId === 'immune-response') {
-    return [createLogEntry('Immune Mimicry activates. Host targeting loses colony fidelity.')]
-  }
-
-  return []
+  const tier = isFullCoverage ? 'full' : 'partial'
+  return [createLogEntry(protocolLines[countermeasureId][tier])]
 }
 
 export function checkVisibilityUnlocks(state: GameState, now = Date.now()): GameState {
@@ -1003,6 +1711,13 @@ export function tick(state: GameState, now = Date.now()): GameState {
   next = tickSignalSystem(next, deltaMs)
   next = tickDefenseResponseState(next, deltaMs)
   next = tickMycorrhizalNetwork(next, now)
+  next = tickEnzymeReserves(next, deltaMs)
+  next = tickHostStress(next, deltaMs)
+  next = tickActiveAttack(next, now)
+  next = tickSeasonalCycle(next, now)
+  next = tickGrindEvent(next, deltaMs)
+  next = tickRivalNetwork(next, now)
+  next = tickIntegrationMeter(next, deltaMs)
   next = maybeAppendDefenseFlavorLog(next, deltaMs)
 
   // Drain manifestation queue: one message every 2 seconds
@@ -1081,6 +1796,335 @@ function tickMycorrhizalNetwork(state: GameState, now: number): GameState {
       ...next.log,
       createLogEntry(`Mycorrhizal Network pulse. Network resonance yielded ${formulas.formatDecimal(pulseGain)} biomass.`),
     ]),
+  }
+}
+
+// --- ENZYME RESERVES & HOST STRESS ---
+
+function tickEnzymeReserves(state: GameState, deltaMs: number): GameState {
+  const hostDef = hostDefinitions.find(h => h.stage === state.currentStage)
+  if (!hostDef || !hostDef.activeAttackAvailable) {
+    return state
+  }
+
+  const elapsedSeconds = deltaMs / 1000
+  const gain = formulas.getEnzymePassiveGainRate() * elapsedSeconds
+  const newReserves = Math.min(formulas.getEnzymeReserveCap(state), state.enzymeReserves + gain)
+
+  return {
+    ...state,
+    enzymeReserves: newReserves,
+  }
+}
+
+function tickHostStress(state: GameState, deltaMs: number): GameState {
+  if (state.currentStage < 4) {
+    return state
+  }
+
+  const elapsedSeconds = deltaMs / 1000
+  const decay = formulas.getHostStressDecayRate() * elapsedSeconds
+  const newStress = Math.max(0, state.hostStress.currentStress - decay)
+
+  return {
+    ...state,
+    hostStress: {
+      ...state.hostStress,
+      currentStress: newStress,
+    },
+  }
+}
+
+function tickActiveAttack(state: GameState, now: number): GameState {
+  if (!state.activeAttack || !state.activeAttack.isActive) {
+    return state
+  }
+
+  if (now >= state.activeAttack.endsAt) {
+    return {
+      ...state,
+      activeAttack: {
+        ...state.activeAttack,
+        isActive: false,
+        zoneId: null,
+        bpsBonusMultiplier: 1,
+      },
+    }
+  }
+
+  return state
+}
+
+// --- SEASONAL CYCLE (HOST 07) ---
+
+function tickSeasonalCycle(state: GameState, now: number): GameState {
+  if (state.currentStage !== 7) {
+    if (state.seasonalState !== null) {
+      return { ...state, seasonalState: null }
+    }
+    return state
+  }
+
+  if (state.seasonalState === null) {
+    return {
+      ...state,
+      seasonalState: {
+        currentSeason: 'spring',
+        seasonStartTime: now,
+        seasonIndex: 0,
+      },
+    }
+  }
+
+  const seasonDurationMs = formulas.getSeasonDurationSeconds() * 1000
+  const elapsed = now - state.seasonalState.seasonStartTime
+
+  if (elapsed < seasonDurationMs) {
+    return state
+  }
+
+  const nextSeasonIndex = (state.seasonalState.seasonIndex + 1) % 4
+  const nextSeason = formulas.getSeasonFromIndex(nextSeasonIndex)
+
+  return {
+    ...state,
+    seasonalState: {
+      currentSeason: nextSeason,
+      seasonStartTime: now,
+      seasonIndex: nextSeasonIndex,
+    },
+  }
+}
+
+// --- RIVAL NETWORK (HOST 08) ---
+
+function tickRivalNetwork(state: GameState, now: number): GameState {
+  if (state.currentStage !== 8) {
+    if (state.rivalNetworkState !== null) {
+      return { ...state, rivalNetworkState: null }
+    }
+    return state
+  }
+
+  const rivalState = state.rivalNetworkState ?? {
+    isSuppressing: false,
+    suppressionEndAt: 0,
+    activeNodes: [] as string[],
+  }
+
+  let logs: string[] = []
+  let updatedRivalState = { ...rivalState }
+  let updatedZones = state.zones
+
+  // Handle rival suppression from active attacks
+  if (updatedRivalState.isSuppressing && now >= updatedRivalState.suppressionEndAt) {
+    updatedRivalState = {
+      ...updatedRivalState,
+      isSuppressing: false,
+      suppressionEndAt: 0,
+    }
+    logs.push('Rival network suppression ending. The Wood Wide Web resumes activity.')
+  }
+
+  // Rival countermeasures - periodically check for rival countermeasure deployment
+  if (!updatedRivalState.isSuppressing && Math.random() < BALANCE.HOSTS['08'].rivalNetwork.countermeasureFrequency) {
+    const playerZones = updatedZones.filter(z => z.isUnlocked && z.compromisePercent > 0)
+    if (playerZones.length > 0) {
+      const targetZone = playerZones[Math.floor(Math.random() * playerZones.length)]
+      const zoneIndex = updatedZones.findIndex(z => z.id === targetZone.id)
+
+      // Zone decay from rival countermeasures
+      const decayAmount = BALANCE.HOSTS['08'].rivalNetwork.zoneDecayRate * 100
+      const newCompromise = Math.max(0, targetZone.compromisePercent - decayAmount)
+      const newZoneHealth = targetZone.maxHealth.mul(1 - newCompromise / 100)
+
+      updatedZones = updatedZones.map((z, i) => {
+        if (i === zoneIndex) {
+          return {
+            ...z,
+            health: Decimal.max(new Decimal(0), newZoneHealth),
+            compromisePercent: newCompromise,
+          }
+        }
+        return z
+      })
+
+      logs.push(`Rival countermeasures deployed in ${targetZone.name}. Zone compromise reduced by ${decayAmount.toFixed(1)}%.`)
+    }
+  }
+
+  // Handle rival node disruption when active attack is used on a rival-controlled zone
+  if (state.activeAttack?.isActive && state.activeAttack.zoneId) {
+    const targetedZone = updatedZones.find(z => z.id === state.activeAttack!.zoneId)
+    if (targetedZone?.isRivalControlled && targetedZone?.rivalControlEndAt) {
+      updatedZones = updatedZones.map(z => {
+        if (z.id === targetedZone.id) {
+          return {
+            ...z,
+            isRivalControlled: false,
+            rivalControlEndAt: undefined,
+          }
+        }
+        return z
+      })
+      logs.push(`Active attack disrupted rival node in ${targetedZone.name}. Rival control neutralized.`)
+    }
+  }
+
+  // Expire rival-controlled zones
+  let hasRivalControlExpired = false
+  updatedZones = updatedZones.map(z => {
+    if (z.isRivalControlled && z.rivalControlEndAt && now >= z.rivalControlEndAt) {
+      hasRivalControlExpired = true
+      return {
+        ...z,
+        isRivalControlled: false,
+        rivalControlEndAt: undefined,
+      }
+    }
+    return z
+  })
+
+  if (hasRivalControlExpired) {
+    logs.push('Rival control period expired in one or more zones.')
+  }
+
+  // Update host corruption based on updated zones
+  const hostCorruptionPercent = calculateHostCorruptionFromZones(updatedZones)
+
+  if (logs.length > 0) {
+    return {
+      ...state,
+      rivalNetworkState: updatedRivalState,
+      zones: updatedZones,
+      hostCorruptionPercent,
+      log: appendLogs(state.log, logs),
+    }
+  }
+
+  return {
+    ...state,
+    rivalNetworkState: updatedRivalState,
+    zones: updatedZones,
+    hostCorruptionPercent,
+  }
+}
+
+// --- INTEGRATION METER (HOST 11) ---
+
+function tickIntegrationMeter(state: GameState, deltaMs: number): GameState {
+  const now = Date.now()
+  let logs: string[] = []
+
+  // Handle integration pulse expiration
+  let integrationPulse = state.integrationPulse
+  if (integrationPulse?.isActive && now >= integrationPulse.endsAt) {
+    integrationPulse = null
+    logs.push('Integration Pulse fading. The network returns to normal operation.')
+  }
+
+  // If not in stage 11, clear integration-related state
+  if (state.currentStage !== 11) {
+    const result: GameState = {
+      ...state,
+      integrationPulse: integrationPulse?.isActive ? integrationPulse : null,
+    }
+    if (state.integrationZones.some(z => !z.isLocked)) {
+      result.log = appendLogs(state.log, ['Integration systems powering down.'])
+    }
+    return result
+  }
+
+  const elapsedSeconds = deltaMs / 1000
+  const fillRate = formulas.getIntegrationMeterFillRate(state)
+  const meterIncrease = fillRate * elapsedSeconds
+
+  let nextIntegrationMeter = Math.min(
+    state.integrationMeter + meterIncrease,
+    formulas.getIntegrationMeterMax()
+  )
+
+  const updatedIntegrationZones = state.integrationZones.map(zone => {
+    const zoneState = state.zones.find(z => z.id === zone.zoneId)
+    if (!zoneState) return zone
+
+    const newSaturationPercent = Math.min(100, zoneState.compromisePercent)
+    const shouldUnlock = zoneState.compromisePercent >= 50 && zone.isLocked
+
+    const contributionRate = shouldUnlock || !zone.isLocked
+      ? (newSaturationPercent >= 100 ? 0.5 : newSaturationPercent >= 80 ? 0.3 : 0.1)
+      : 0
+
+    return {
+      ...zone,
+      saturationPercent: newSaturationPercent,
+      isLocked: zone.isLocked && !shouldUnlock,
+      contributionRate: shouldUnlock ? 0.1 : contributionRate,
+    }
+  })
+
+  for (const zone of updatedIntegrationZones) {
+    const wasLocked = state.integrationZones.find(z => z.zoneId === zone.zoneId)?.isLocked
+    if (wasLocked && !zone.isLocked) {
+      logs.push(`${zone.zoneId} unlocked for integration. Saturation: ${zone.saturationPercent.toFixed(1)}%`)
+    }
+  }
+
+  const result: GameState = {
+    ...state,
+    integrationMeter: nextIntegrationMeter,
+    integrationZones: updatedIntegrationZones,
+    integrationPulse: integrationPulse,
+  }
+
+  const flavorData = HOST_DEGRADATION_FLAVOR['12']
+  if (flavorData) {
+    const oldMeter = state.integrationMeter
+    const newMeter = nextIntegrationMeter
+    const key = '_shownDegradation_12'
+    const shownThresholds: number[] = (state as unknown as Record<string, unknown>)[key] as number[] || []
+
+    let newMessages: string[] = []
+    let newShownThresholds: number[] = []
+
+    for (let i = 0; i < flavorData.thresholds.length; i++) {
+      const threshold = flavorData.thresholds[i]
+      const oldPercent = (oldMeter / 1000) * 100
+      const newPercent = (newMeter / 1000) * 100
+      if (oldPercent < threshold && newPercent >= threshold && !shownThresholds.includes(threshold)) {
+        newMessages.push(flavorData.messages[i])
+        newShownThresholds.push(threshold)
+      }
+    }
+
+    if (newMessages.length > 0) {
+      result.manifestationQueue = [...result.manifestationQueue, ...newMessages]
+      ;(result as unknown as Record<string, unknown>)[key] = [...shownThresholds, ...newShownThresholds]
+    }
+  }
+
+  if (logs.length > 0) {
+    result.log = appendLogs(state.log, logs)
+  }
+
+  return result
+}
+
+export function useIntegrationPulseAction(state: GameState): GameState {
+  if (!formulas.canUseIntegrationPulse(state)) return state
+
+  const cost = formulas.getIntegrationPulseCost()
+  const durationMs = formulas.getIntegrationPulseDurationSeconds() * 1000
+
+  return {
+    ...state,
+    signal: state.signal - cost,
+    integrationPulse: {
+      isActive: true,
+      endsAt: Date.now() + durationMs,
+      bpsBonusMultiplier: formulas.getIntegrationPulseBPSMultiplier(),
+    },
+    log: appendLog(state.log, 'Integration Pulse activated. Planetary systems aligning.'),
   }
 }
 
@@ -1377,6 +2421,192 @@ export function absorb(state: GameState): GameState {
   return checkVisibilityUnlocks(next)
 }
 
+// --- ACTIVE ATTACK ---
+
+export function useActiveAttackAction(state: GameState, zoneId?: string): GameState {
+  const hostDef = hostDefinitions.find(h => h.stage === state.currentStage)
+  if (!hostDef || !hostDef.activeAttackAvailable) {
+    return state
+  }
+
+  if (state.activeAttack?.isActive && state.activeAttack.endsAt > Date.now()) {
+    return {
+      ...state,
+      log: appendLog(state.log, 'Active attack already in progress. Wait for current attack to complete.'),
+    }
+  }
+
+  if (state.activeAttack?.cooldownEndAt && state.activeAttack.cooldownEndAt > Date.now()) {
+    return {
+      ...state,
+      log: appendLog(state.log, 'Active attack on cooldown. Wait before deploying again.'),
+    }
+  }
+
+  const cost = formulas.getActiveAttackCost(state, zoneId)
+  if (state.enzymeReserves < cost) {
+    return {
+      ...state,
+      log: appendLog(state.log, 'Insufficient Enzyme Reserves for active attack.'),
+    }
+  }
+
+  const stressIncrement = formulas.getActiveAttackStressIncrement(state)
+  let bpsBonus = 1 + formulas.getActiveAttackBPSBonus()
+  const durationMs = 10_000
+  const cooldownMs = formulas.getActiveAttackCooldown()
+
+  let logs: string[] = [`Active attack deployed. BPS boosted for ${durationMs / 1000} seconds.`]
+
+  // Rival node disruption in Host 08
+  let nextZones = state.zones
+  if (state.currentStage === 8 && zoneId) {
+    const targetedZone = state.zones.find(z => z.id === zoneId)
+    if (targetedZone?.isRivalControlled) {
+      // Disrupt the rival node - bonus BPS and clear rival control
+      bpsBonus = 1 + formulas.getActiveAttackBPSBonus() + formulas.getRivalDisruptionBPSBonus()
+      nextZones = state.zones.map(z => {
+        if (z.id === zoneId) {
+          return {
+            ...z,
+            isRivalControlled: false,
+            rivalControlEndAt: undefined,
+          }
+        }
+        return z
+      })
+      logs.push(`Rival node disrupted in ${targetedZone.name}! Bonus BPS applied.`)
+    }
+  }
+
+  return recalculateDerivedState({
+    ...state,
+    enzymeReserves: state.enzymeReserves - cost,
+    hostStress: {
+      currentStress: state.hostStress.currentStress + stressIncrement,
+      lastAttackTime: Date.now(),
+    },
+    activeAttack: {
+      isActive: true,
+      zoneId: zoneId ?? null,
+      endsAt: Date.now() + durationMs,
+      bpsBonusMultiplier: bpsBonus,
+      cooldownEndAt: Date.now() + cooldownMs,
+    },
+    zones: nextZones,
+    log: appendLogs(state.log, logs),
+  })
+}
+
+// --- GRINDABLE EVENTS (HOST 04+) ---
+
+function tickGrindEvent(state: GameState, deltaMs: number): GameState {
+  if (state.currentStage < 4) {
+    if (state.activeGrindSession) {
+      return { ...state, activeGrindSession: null }
+    }
+    return state
+  }
+
+  if (!state.activeGrindSession) {
+    return state
+  }
+
+  const sessionWindowMs = formulas.getGrindEventSessionWindowSeconds() * 1000
+  const elapsedMs = Date.now() - state.activeGrindSession.windowStartTime
+
+  if (elapsedMs >= sessionWindowMs) {
+    return {
+      ...state,
+      activeGrindSession: {
+        eventCount: 0,
+        windowStartTime: Date.now(),
+      },
+    }
+  }
+
+  return state
+}
+
+export function startGrindEventSession(state: GameState): GameState {
+  if (state.currentStage < 4) {
+    return {
+      ...state,
+      log: appendLog(state.log, 'Grind events unlock at Host 04.'),
+    }
+  }
+
+  if (state.activeGrindSession) {
+    return {
+      ...state,
+      log: appendLog(state.log, 'Grind session already active.'),
+    }
+  }
+
+  return {
+    ...state,
+    activeGrindSession: {
+      eventCount: 0,
+      windowStartTime: Date.now(),
+    },
+    log: appendLog(state.log, 'Grind session initiated. Suppression attempts available.'),
+  }
+}
+
+export function triggerGrindEvent(state: GameState): GameState {
+  if (state.currentStage < 4) {
+    return state
+  }
+
+  if (!state.activeGrindSession) {
+    return {
+      ...state,
+      log: appendLog(state.log, 'Start a grind session first.'),
+    }
+  }
+
+  const grindableEventIds = Object.values(defenseFlavorDefinitions)
+    .filter((event) => event.isGrindable && state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max)
+    .map((event) => event.id)
+
+  if (grindableEventIds.length === 0) {
+    return {
+      ...state,
+      log: appendLog(state.log, 'No grindable events available at this host.'),
+    }
+  }
+
+  const selectedEventId = grindableEventIds[Math.floor(Math.random() * grindableEventIds.length)]
+  const definition = defenseFlavorDefinitions[selectedEventId]
+
+  const runEventCount = state.runGrindEventCount
+  const { outcome, enzymeReward } = formulas.resolveGrindEvent(runEventCount)
+
+  let logs: string[] = []
+  let nextEnzymeReserves = state.enzymeReserves
+
+  if (outcome === 'success') {
+    nextEnzymeReserves = Math.min(formulas.getEnzymeReserveCap(state), state.enzymeReserves + enzymeReward)
+    logs.push(`Grind successful! ${definition.name} suppressed. +${enzymeReward} Enzyme Reserves.`)
+  } else if (outcome === 'partialFail') {
+    nextEnzymeReserves = Math.min(formulas.getEnzymeReserveCap(state), state.enzymeReserves + enzymeReward)
+    logs.push(`Grind partial failure. ${definition.name} weakened but persisted. +${enzymeReward} Enzyme Reserves.`)
+  } else {
+    logs.push(`Grind failed. ${definition.name} fully persisted. No enzyme reward.`)
+  }
+
+  return recalculateDerivedState({
+    ...state,
+    activeGrindSession: {
+      eventCount: state.activeGrindSession.eventCount + 1,
+      windowStartTime: state.activeGrindSession.windowStartTime,
+    },
+    runGrindEventCount: runEventCount + 1,
+    enzymeReserves: nextEnzymeReserves,
+    log: appendLogs(state.log, logs),
+  })
+}
+
 // --- GENERATORS ---
 
 export function buyGeneratorAction(state: GameState, generatorId: GeneratorId): GameState {
@@ -1558,6 +2788,38 @@ export function advanceStageAction(state: GameState): GameState {
   const nextStage = state.currentStage + 1
   const nextHost = hostDefinitions.find((h) => h.stage === nextStage)!
 
+  const nextHostId = nextHost.hostId as HostId
+  const nextZones: ZoneState[] = nextHost.zones.map(zone => {
+    const zoneMaxHealth = BALANCE.HOST_HEALTH[nextStage - 1] * (zone.healthPercent / 100)
+    return {
+      id: zone.id,
+      name: zone.name,
+      health: new Decimal(zoneMaxHealth),
+      maxHealth: new Decimal(zoneMaxHealth),
+      isUnlocked: zone.unlockThreshold === undefined,
+      compromisePercent: 0,
+      isRivalControlled: nextStage === 8 ? false : undefined,
+      rivalControlEndAt: nextStage === 8 ? undefined : undefined,
+    }
+  })
+
+  const vectorBonus = state.vectorProgress > 0 && nextStage === 7
+    ? formulas.getVectorBPSBonus(6)
+    : 0
+
+  const supplyChainBonusActive = nextStage === 10
+  const supplyChainZoneBonus = supplyChainBonusActive
+    ? formulas.getSupplyChainZoneStartBonus()
+    : 0
+
+  const updatedNextZones = supplyChainZoneBonus > 0
+    ? nextZones.map(zone => ({
+        ...zone,
+        health: new Decimal(zone.maxHealth.add(zone.maxHealth.mul(supplyChainZoneBonus / 100))),
+        maxHealth: new Decimal(zone.maxHealth.add(zone.maxHealth.mul(supplyChainZoneBonus / 100))),
+      }))
+    : nextZones
+
   return checkVisibilityUnlocks(recalculateDerivedState({
     ...state,
     hostEchoes: {
@@ -1581,14 +2843,27 @@ export function advanceStageAction(state: GameState): GameState {
     hostCorruptionPercent: 0,
     manifestationQueue: [],
     nextDefenseCheckAt: Date.now() + BALANCE.DEFENSE_EVENT_COOLDOWN_MS,
+    zones: updatedNextZones,
+    currentHostId: nextHostId,
+    vectorProgress: nextStage === 7 ? 0 : state.vectorProgress,
+    supplyChainBonusActive,
+    runGrindEventCount: 0,
+    proactiveCountermeasure: null,
+    proactiveCountermeasureEndAt: 0,
+    tier2ScanActive: false,
+    tier2ScannedEventId: null,
+    tier2PreemptiveSet: false,
     log: clampLog([
       ...state.log,
       createLogEntry(`Host cleared. ${echoDef.name} absorbed: ${echoDef.description}`),
       createLogEntry(`Permanent bonus: ${formatEchoBonus(echoDef.bonus)}`),
       createLogEntry(`Stage ${nextStage} initiated. New host identified: ${nextHost.name}.`),
       createLogEntry(`[${nextHost.stageLabel.toUpperCase()}] ${nextHost.subtitle}`),
-      createLogEntry(nextHost.flavor),
+      createLogEntry(nextHost.flavorQuote || nextHost.flavor),
       createLogEntry(nextHost.transitionSignal),
+      ...(supplyChainBonusActive
+        ? [createLogEntry(`Supply chain network integrated. Agricultural bonus active.`)]
+        : []),
     ]),
   }))
 }
@@ -1671,7 +2946,46 @@ export function setBuyAmountAction(state: GameState, amount: 1 | 10 | 100 | 'MAX
 
 export function equipCountermeasureAction(state: GameState, countermeasureId: CountermeasureId): GameState {
   if (state.equippedCountermeasure === countermeasureId) return state
-  if (state.equippedCountermeasure !== null) return state
+
+  if (state.activeDefenseEvents.length > 0) {
+    return {
+      ...state,
+      log: appendLog(
+        state.log,
+        'Protocol switch denied. A defense event is active. Wait for it to resolve.'
+      ),
+    }
+  }
+
+  const definition = countermeasureDefinitions.find((c) => c.id === countermeasureId)
+  if (!definition) return state
+
+  const previousName = state.equippedCountermeasure
+    ? countermeasureDefinitions.find((c) => c.id === state.equippedCountermeasure)?.name ?? state.equippedCountermeasure
+    : null
+
+  const logLine = previousName
+    ? `Protocol switched: ${previousName} → ${definition.name}. ${definition.flavorLine}`
+    : `${definition.name} protocol engaged. ${definition.flavorLine}`
+
+  return {
+    ...state,
+    equippedCountermeasure: countermeasureId,
+    log: appendLog(state.log, logLine),
+  }
+}
+
+export function setProactiveCountermeasureAction(
+  state: GameState,
+  countermeasureId: ProactiveCountermeasureId,
+  now: number
+): GameState {
+  if (state.currentStage < 10) return state
+  if (state.signal < BALANCE.PROACTIVE_COUNTERMEASURES.signalCost) return state
+  if (state.proactiveCountermeasure === countermeasureId) return state
+
+  const durationMs = BALANCE.PROACTIVE_COUNTERMEASURES.durationMs
+  const endAt = now + durationMs
 
   const name = countermeasureId
     .split('-')
@@ -1680,8 +2994,45 @@ export function equipCountermeasureAction(state: GameState, countermeasureId: Co
 
   return {
     ...state,
-    equippedCountermeasure: countermeasureId,
-    log: appendLog(state.log, `${name} protocol equipped for this run. Countermeasure loadout locked.`),
+    signal: state.signal - BALANCE.PROACTIVE_COUNTERMEASURES.signalCost,
+    proactiveCountermeasure: countermeasureId,
+    proactiveCountermeasureEndAt: endAt,
+    log: appendLog(state.log, `${name} countermeasures deployed for 60 seconds. Network-wide protection active.`),
+  }
+}
+
+export function scanDefenseEventAction(state: GameState): GameState {
+  if (state.currentStage < 10) return state
+  if (state.tier2ScanActive) return state
+  if (state.signal < BALANCE.PROACTIVE_COUNTERMEASURES.signalCost) return state
+  if (!state.nextDefenseEventId) return state
+
+  const scannedEventId = state.nextDefenseEventId
+  const definition = defenseFlavorDefinitions[scannedEventId]
+
+  return {
+    ...state,
+    signal: state.signal - BALANCE.PROACTIVE_COUNTERMEASURES.signalCost,
+    tier2ScanActive: true,
+    tier2ScannedEventId: scannedEventId,
+    tier2PreemptiveSet: false,
+    log: appendLog(
+      state.log,
+      `Tier 2 scan complete. Next threat identified: ${definition?.name ?? scannedEventId}.`
+    ),
+  }
+}
+
+export function setPreemptiveCountermeasureAction(state: GameState): GameState {
+  if (!state.tier2ScanActive || !state.tier2ScannedEventId) return state
+  if (state.tier2PreemptiveSet) return state
+  if (state.signal < BALANCE.PROACTIVE_COUNTERMEASURES.signalCost) return state
+
+  return {
+    ...state,
+    signal: state.signal - BALANCE.PROACTIVE_COUNTERMEASURES.signalCost,
+    tier2PreemptiveSet: true,
+    log: appendLog(state.log, `Preemptive countermeasure set. ${state.tier2ScannedEventId} will be met with enhanced resistance.`),
   }
 }
 
@@ -1747,10 +3098,28 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
     }
   }
 
+  const hostId = String(state.currentStage).padStart(2, '0')
+  const hostConfig = BALANCE.HOSTS[hostId as keyof typeof BALANCE.HOSTS]
+  if (!hostConfig || hostConfig.defenseEventProfile === 'none') {
+    return {
+      ...state,
+      nextDefenseCheckAt: now + BALANCE.DEFENSE_EVENT_COOLDOWN_MS,
+    }
+  }
+
+  const profile = BALANCE.DEFENSE_EVENTS.profiles[hostConfig.defenseEventProfile as keyof typeof BALANCE.DEFENSE_EVENTS.profiles]
+  let frequencyMultiplier = profile?.frequencyMultiplier ?? 1.0
+
+  if (state.currentStage === 7 && state.seasonalState) {
+    const seasonalFreqMult = formulas.getSeasonalEventFrequencyMultiplier(state.seasonalState.currentSeason)
+    frequencyMultiplier *= seasonalFreqMult
+  }
+
   const nextCheckAt = now + BALANCE.DEFENSE_EVENT_COOLDOWN_MS
+  const baseChance = BALANCE.DEFENSE_EVENT_TRIGGER_BASE + (state.currentStage - 1) * BALANCE.DEFENSE_EVENT_TRIGGER_PER_STAGE
   const triggerChance = Math.min(
     BALANCE.DEFENSE_EVENT_TRIGGER_MAX,
-    BALANCE.DEFENSE_EVENT_TRIGGER_BASE + (state.currentStage - 1) * BALANCE.DEFENSE_EVENT_TRIGGER_PER_STAGE
+    baseChance * frequencyMultiplier
   )
   const roll = Math.random()
 
@@ -1763,7 +3132,7 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
 
   const eventId = state.nextDefenseEventId ?? rollDefenseEventId(state)
   const eligibleEventIds = Object.values(defenseFlavorDefinitions)
-    .filter((event) => state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max)
+    .filter((event) => state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max && !event.isImmediateHit)
     .map((event) => event.id)
   const availableEventIds = eligibleEventIds.filter(
     (id) => !state.activeDefenseEvents.some((existing) => existing.id === id)
@@ -1788,15 +3157,18 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
     }
   }
 
-  const mitigatedEvent = applyCountermeasureToEvent(state, event, now)
+  const { event: mitigatedEvent, outcome, enzymeReward } = applyCountermeasureToEvent(state, event, now)
   const nextForecast = rollDefenseEventId(state)
   const parasiteBurstMs = state.strain === 'parasite'
     ? BALANCE.STRAIN_PARASITE_DEFENSE_BURST_MS
     : state.activeParasiteDefenseBurstMs
 
-  return recalculateDerivedState({
+  let resultState: GameState = {
     ...state,
     activeDefenseEvents: [...state.activeDefenseEvents, mitigatedEvent],
+    enzymeReserves: state.equippedCountermeasure !== null
+      ? Math.min(formulas.getEnzymeReserveCap(state), state.enzymeReserves + enzymeReward)
+      : state.enzymeReserves,
     _pendingOfflineEvents: [
       ...state._pendingOfflineEvents,
       {
@@ -1812,12 +3184,107 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
     log: clampLog([
       ...state.log,
       ...getDefenseEventLogLines(mitigatedEvent),
+      ...getCountermeasureOutcomeLogs(outcome, mitigatedEvent.name, enzymeReward),
       ...getCountermeasureLogLines(state.equippedCountermeasure, mitigatedEvent.id),
       ...(state.strain === 'parasite'
         ? [createLogEntry('Parasite counterburst window opened. Manual absorption spikes briefly.')]
         : []),
     ]),
-  })
+  }
+
+  const immediateHitEventId = rollImmediateHitEventId(state)
+  if (immediateHitEventId && !state.activeDefenseEvents.some((existing) => existing.id === immediateHitEventId)) {
+    const immediateEvent = createDefenseEvent(state, now, immediateHitEventId)
+    if (immediateEvent) {
+      const definition = defenseFlavorDefinitions[immediateHitEventId]
+      resultState = {
+        ...resultState,
+        activeDefenseEvents: [...resultState.activeDefenseEvents, immediateEvent],
+        log: clampLog([
+          ...resultState.log,
+          ...definition.triggerLogs.map(createLogEntry),
+        ]),
+      }
+    }
+  }
+
+  // Extinction-class events (Host 11)
+  if (state.currentStage === 11) {
+    const extinctionRoll = Math.random()
+    if (extinctionRoll < formulas.getExtinctionEventFrequency()) {
+      const extinctionEligibleIds = Object.values(defenseFlavorDefinitions)
+        .filter((event) => event.isExtinctionEvent && state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max)
+        .map((event) => event.id)
+      const availableExtinctionIds = extinctionEligibleIds.filter(
+        (id) => !resultState.activeDefenseEvents.some((existing) => existing.id === id)
+      )
+      if (availableExtinctionIds.length > 0) {
+        const extinctionEventId = getRandomItem(availableExtinctionIds)
+        const extinctionEvent = createDefenseEvent(resultState, now, extinctionEventId)
+        if (extinctionEvent) {
+          const extinctionDef = defenseFlavorDefinitions[extinctionEventId]
+          let meterRegression = 0
+          if (extinctionDef.meterRegressionPercent) {
+            meterRegression = extinctionDef.meterRegressionPercent
+          } else {
+            meterRegression = formulas.getExtinctionEventMeterRegression()
+          }
+          const newMeter = Math.max(0, resultState.integrationMeter - meterRegression)
+          resultState = {
+            ...resultState,
+            integrationMeter: newMeter,
+            activeDefenseEvents: [...resultState.activeDefenseEvents, extinctionEvent],
+            log: clampLog([
+              ...resultState.log,
+              ...extinctionDef.triggerLogs.map(createLogEntry),
+              createLogEntry(`EXTINCTION EVENT: Integration meter regresses by ${meterRegression}%. Current meter: ${newMeter.toFixed(1)}%`),
+            ]),
+          }
+        }
+      }
+    }
+  }
+
+  if (state.currentStage === 10) {
+    const stressThreshold = BALANCE.HOST_STRESS.thresholds.threshold2
+    const stressRatio = state.hostStress.currentStress / stressThreshold
+    if (stressRatio >= BALANCE.MULTI_FRONT.stressThresholdRatio) {
+      const extraEventCount = BALANCE.MULTI_FRONT.extraEventCount
+      const eligibleEventIds = Object.values(defenseFlavorDefinitions)
+        .filter((event) => state.currentStage >= event.stageRange.min && state.currentStage <= event.stageRange.max && !event.isImmediateHit)
+        .map((event) => event.id)
+      const availableEventIds = eligibleEventIds.filter(
+        (id) => !resultState.activeDefenseEvents.some((existing) => existing.id === id)
+      )
+
+      for (let i = 0; i < extraEventCount && availableEventIds.length > 0; i++) {
+        const randomIndex = Math.floor(Math.random() * availableEventIds.length)
+        const extraEventId = availableEventIds.splice(randomIndex, 1)[0]
+        if (extraEventId) {
+          const extraEvent = createDefenseEvent(resultState, now, extraEventId)
+          if (extraEvent) {
+            const { event: mitigatedExtraEvent, enzymeReward: extraEnzymeReward } = applyCountermeasureToEvent(resultState, extraEvent, now)
+            const definition = defenseFlavorDefinitions[extraEventId]
+            resultState = {
+              ...resultState,
+              activeDefenseEvents: [...resultState.activeDefenseEvents, mitigatedExtraEvent],
+              enzymeReserves: Math.min(
+                formulas.getEnzymeReserveCap(resultState),
+                resultState.enzymeReserves + extraEnzymeReward
+              ),
+              log: clampLog([
+                ...resultState.log,
+                ...definition.triggerLogs.map(createLogEntry),
+                createLogEntry(`Multi-front assault! ${definition.name} strikes from another angle.`),
+              ]),
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return recalculateDerivedState(resultState)
 }
 
 // --- SAVE / LOAD ---
@@ -2038,6 +3505,9 @@ interface SerializedState {
     multiplier: string
     clickMultiplier?: string
     disabledGeneratorId?: string
+    tier?: 1 | 2
+    isGrindable?: boolean
+    chargeCost?: number
   }>
   nextDefenseEventId: DefenseEventId | null
   equippedCountermeasure: CountermeasureId | null
@@ -2079,6 +3549,63 @@ interface SerializedState {
     accumulatedBonus: number
   }
   nextMycorrhizalPulseAt?: number | null
+  zones?: Array<{
+    id: string
+    name: string
+    health: string
+    maxHealth: string
+    isUnlocked: boolean
+    compromisePercent: number
+    isRivalControlled?: boolean
+    rivalControlEndAt?: number
+  }>
+  currentHostId?: string
+  enzymeReserves?: number
+  hostStress?: {
+    currentStress: number
+    lastAttackTime: number
+  }
+  seasonalState?: {
+    currentSeason: 'spring' | 'summer' | 'autumn' | 'winter'
+    seasonStartTime: number
+    seasonIndex: number
+  } | null
+  rivalNetworkState?: {
+    isSuppressing: boolean
+    suppressionEndAt: number
+    activeNodes: string[]
+  } | null
+  integrationZones?: Array<{
+    zoneId: string
+    saturationPercent: number
+    isLocked: boolean
+    contributionRate: number
+  }>
+  integrationMeter?: number
+  activeAttack?: {
+    isActive: boolean
+    zoneId: string | null
+    endsAt: number
+    bpsBonusMultiplier: number
+    cooldownEndAt: number
+  } | null
+  integrationPulse?: {
+    isActive: boolean
+    endsAt: number
+    bpsBonusMultiplier: number
+  } | null
+  vectorProgress?: number
+  activeGrindSession?: {
+    eventCount: number
+    windowStartTime: number
+  }
+  runGrindEventCount?: number
+  proactiveCountermeasure?: string | null
+  proactiveCountermeasureEndAt?: number
+  tier2ScanActive?: boolean
+  tier2ScannedEventId?: string | null
+  tier2PreemptiveSet?: boolean
+  supplyChainBonusActive?: boolean
 }
 
 function toDecimal(value: string | number | Decimal): Decimal {
@@ -2148,6 +3675,25 @@ function serialize(s: GameState): SerializedState {
     manifestationQueue: s.manifestationQueue,
     geneticMemoryStats: s.geneticMemoryStats,
     nextMycorrhizalPulseAt: s.nextMycorrhizalPulseAt,
+    zones: serializeZones(s.zones),
+    currentHostId: s.currentHostId,
+    enzymeReserves: s.enzymeReserves,
+    hostStress: s.hostStress,
+    seasonalState: s.seasonalState,
+    rivalNetworkState: s.rivalNetworkState,
+    integrationZones: s.integrationZones,
+    integrationMeter: s.integrationMeter,
+    activeAttack: s.activeAttack,
+    integrationPulse: s.integrationPulse,
+    vectorProgress: s.vectorProgress,
+    activeGrindSession: s.activeGrindSession ?? undefined,
+    runGrindEventCount: s.runGrindEventCount,
+    proactiveCountermeasure: s.proactiveCountermeasure,
+    proactiveCountermeasureEndAt: s.proactiveCountermeasureEndAt,
+    tier2ScanActive: s.tier2ScanActive,
+    tier2ScannedEventId: s.tier2ScannedEventId,
+    tier2PreemptiveSet: s.tier2PreemptiveSet,
+    supplyChainBonusActive: s.supplyChainBonusActive,
   }
 }
 
@@ -2158,9 +3704,55 @@ function normalizeOfflineEvents(rawEvents: SerializedState['_offlineEvents']): O
   }))
 }
 
+function normalizeZones(rawZones: SerializedState['zones']): ZoneState[] {
+  if (!rawZones || rawZones.length === 0) {
+    return createDefaultState().zones
+  }
+  return rawZones.map((zone) => ({
+    id: zone.id,
+    name: zone.name,
+    health: toDecimal(zone.health),
+    maxHealth: toDecimal(zone.maxHealth),
+    isUnlocked: zone.isUnlocked,
+    compromisePercent: zone.compromisePercent,
+    isRivalControlled: zone.isRivalControlled,
+    rivalControlEndAt: zone.rivalControlEndAt,
+  }))
+}
+
+function serializeZones(zones: ZoneState[]): SerializedState['zones'] {
+  return zones.map((zone) => ({
+    id: zone.id,
+    name: zone.name,
+    health: zone.health.toString(),
+    maxHealth: zone.maxHealth.toString(),
+    isUnlocked: zone.isUnlocked,
+    compromisePercent: zone.compromisePercent,
+    isRivalControlled: zone.isRivalControlled,
+    rivalControlEndAt: zone.rivalControlEndAt,
+  }))
+}
+
 function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
   const now = Date.now()
   const base = createFreshState()
+
+  const validCountermeasureIds: CountermeasureId[] = [
+    'moisture-buffer', 'chitin-lattice', 'enzyme-suppressor',
+    'thermal-regulator', 'signal-jammer', 'spore-shield',
+  ]
+  const countermeasureMigrationMap: Record<string, CountermeasureId> = {
+    'moisture-buffer':    'moisture-buffer',
+    'brood-decoy':        'chitin-lattice',
+    'immune-mimicry':     'signal-jammer',
+    'enzyme-neutralizer': 'enzyme-suppressor',
+    'biofilm-shield':     'spore-shield',
+    'signal-jammer':      'signal-jammer',
+  }
+  const rawCountermeasure = raw.equippedCountermeasure as string | null | undefined
+  const migratedCountermeasure: CountermeasureId | null = rawCountermeasure
+    ? (countermeasureMigrationMap[rawCountermeasure] ?? null)
+    : null
 
   const normalized: GameState = {
     biomass: toDecimal(raw.biomass ?? base.biomass),
@@ -2212,7 +3804,7 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
       disabledGeneratorId: event.disabledGeneratorId as import('../lib/game').GeneratorId | undefined,
     })),
     nextDefenseEventId: raw.nextDefenseEventId ?? base.nextDefenseEventId,
-    equippedCountermeasure: raw.equippedCountermeasure ?? base.equippedCountermeasure,
+    equippedCountermeasure: migratedCountermeasure,
     activeParasiteDefenseBurstMs: raw.activeParasiteDefenseBurstMs ?? base.activeParasiteDefenseBurstMs,
     activeCoordinationLinks: raw.activeCoordinationLinks ?? base.activeCoordinationLinks,
     activeVulnerabilityWindow: raw.activeVulnerabilityWindow ?? base.activeVulnerabilityWindow,
@@ -2242,6 +3834,25 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
     manifestationQueue: raw.manifestationQueue ?? base.manifestationQueue,
     geneticMemoryStats: raw.geneticMemoryStats ?? base.geneticMemoryStats,
     nextMycorrhizalPulseAt: raw.nextMycorrhizalPulseAt ?? base.nextMycorrhizalPulseAt,
+    zones: normalizeZones(raw.zones),
+    currentHostId: (raw.currentHostId ?? base.currentHostId) as GameState['currentHostId'],
+    enzymeReserves: raw.enzymeReserves ?? base.enzymeReserves,
+    hostStress: raw.hostStress ?? base.hostStress,
+    seasonalState: raw.seasonalState ?? base.seasonalState,
+    rivalNetworkState: raw.rivalNetworkState ?? base.rivalNetworkState,
+    integrationZones: raw.integrationZones ?? base.integrationZones,
+    integrationMeter: raw.integrationMeter ?? base.integrationMeter,
+    activeAttack: raw.activeAttack ?? base.activeAttack,
+    integrationPulse: raw.integrationPulse ?? base.integrationPulse,
+    vectorProgress: raw.vectorProgress ?? base.vectorProgress,
+    activeGrindSession: raw.activeGrindSession ?? base.activeGrindSession,
+    runGrindEventCount: raw.runGrindEventCount ?? base.runGrindEventCount,
+    proactiveCountermeasure: (raw.proactiveCountermeasure as GameState['proactiveCountermeasure']) ?? base.proactiveCountermeasure,
+    proactiveCountermeasureEndAt: raw.proactiveCountermeasureEndAt ?? base.proactiveCountermeasureEndAt,
+    tier2ScanActive: raw.tier2ScanActive ?? base.tier2ScanActive,
+    tier2ScannedEventId: (raw.tier2ScannedEventId as GameState['tier2ScannedEventId']) ?? base.tier2ScannedEventId,
+    tier2PreemptiveSet: raw.tier2PreemptiveSet ?? base.tier2PreemptiveSet,
+    supplyChainBonusActive: raw.supplyChainBonusActive ?? base.supplyChainBonusActive,
   }
 
   return checkVisibilityUnlocks(recalculateDerivedState(normalized), now)

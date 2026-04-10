@@ -92,7 +92,7 @@ export const BALANCE = {
 
   // Generator base costs (index 0 = Tier 1: Hyphae Strand)
   GENERATOR_BASE_COSTS: [
-    10, 80, 600, 4_000,
+    6, 50, 400, 4_000,
     30_000, 250_000, 2_000_000, 15_000_000,
   ],
 
@@ -103,7 +103,7 @@ export const BALANCE = {
   ],
 
   // Previous-tier ownership needed to reveal the next generator tier
-  GENERATOR_UNLOCK_THRESHOLDS: [0, 8, 7, 6, 8, 7, 6, 5],
+  GENERATOR_UNLOCK_THRESHOLDS: [0, 6, 6, 6, 8, 7, 6, 5],
 
   // Tier 4 unlocks when Stage 2 host progress >= this value (0–100 scale)
   TIER4_STAGE2_HOST_PROGRESS_GATE: 0,
@@ -154,6 +154,24 @@ export const BALANCE = {
   COUNTERMEASURE_MOISTURE_BUFFER_MITIGATION: 0.15,
   COUNTERMEASURE_IMMUNE_MIMICRY_MITIGATION: 0.18,
   COUNTERMEASURE_BROOD_DECOY_FALLBACK_MULTIPLIER: 0.78,
+
+  // ─── COUNTERMEASURE TIER SYSTEM ───────────────────────────────────────────
+  // Full coverage: equipped protocol directly targets this event
+  COUNTERMEASURE_FULL_MITIGATION: 0.70,
+
+  // Partial coverage: adjacent protocol partially covers this event
+  COUNTERMEASURE_PARTIAL_MITIGATION: 0.30,
+
+  // Resilience stat bonus stacks additively on top of tier mitigation
+  // At Resilience 5: +0.05 × 5 = +0.25 additional mitigation
+  COUNTERMEASURE_RESILIENCE_BONUS_PER_POINT: 0.05,
+
+  // Hard cap — mitigation never exceeds this regardless of bonuses
+  // At max investment (full + Resilience 5 + Chitin Shell + Spore Hardening):
+  // 0.70 + 0.25 + 0.12 + 0.08 = 1.15 → capped at 0.90
+  // Some penalty always reaches the player. This is intentional.
+  COUNTERMEASURE_TIER_MITIGATION_CAP: 0.90,
+
   STRAIN_SYMBIOTE_ACTIVE_DEFENSE_MITIGATION_BONUS: 0.06,
   STRAIN_PARASITE_DEFENSE_BURST_MS: 12_000,
   STRAIN_PARASITE_DEFENSE_BURST_CLICK_MULT: 1.5,
@@ -236,11 +254,394 @@ export const BALANCE = {
   // Symbiote scaling: 0.025% per other owned generator
   SYMBIOTE_SCALING_PER_OTHER: 0.00025,
 
-  // Host health values per stage (index 0 = Stage 1)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HOST SYSTEM — ZONES, PROGRESSION, AND HOST-SPECIFIC SETTINGS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Host health values per stage (index 0 = Stage 1, corresponding to Host 01)
+  // Each host can have different total health based on its scale and difficulty
   HOST_HEALTH: [
-    600, 14_000, 90_000, 320_000,
-    1_000_000, 5_000_000, 25_000_000, 100_000_000,
+    300,      // 01: The Fallen Leaf (micro, inert)
+    8_000,    // 02: The Woodlouse (micro, living)
+    60_000,   // 03: The Ant Colony (superorganism)
+    320_000,  // 04: The Rotting Elm (macro, plant)
+    1_000_000,// 05: The Corvid (warm-blooded)
+    5_000_000,// 06: The Boar (large fauna)
+    25_000_000,// 07: The River Network (ecosystem)
+    100_000_000,// 08: The Old-Growth Forest (rival network)
+    500_000_000,// 09: The Agricultural System (human-adjacent)
+    2_000_000_000,// 10: The Urban Microbiome (civilizational)
+    10_000_000_000,// 11: The Biosphere (planetary)
   ],
+
+  // Per-host zone configuration
+  // Each entry contains zone definitions and unlock thresholds
+  HOSTS: {
+    // Host 01: The Fallen Leaf — Single zone, no defense events
+    '01': {
+      zones: [
+        { id: 'leaf_surface', name: 'Leaf Surface', healthPercent: 100 },
+      ],
+      defenseEventProfile: 'none',
+      activeAttackAvailable: false,
+      winCondition: 'healthToZero',
+    },
+    // Host 02: The Woodlouse — Single zone, basic defense events
+    '02': {
+      zones: [
+        { id: 'carapace', name: 'Carapace', healthPercent: 100 },
+      ],
+      defenseEventProfile: 'basic',
+      activeAttackAvailable: false,
+      winCondition: 'healthToZero',
+    },
+    // Host 03: The Ant Colony — Two zones, Queen Node mechanic
+    '03': {
+      zones: [
+        { id: 'outer_colony', name: 'Outer Colony', healthPercent: 60 },
+        { id: 'queen_node', name: 'Queen Node', healthPercent: 40, unlockThreshold: 0.6 },
+      ],
+      defenseEventProfile: 'clustered',
+      activeAttackAvailable: false,
+      winCondition: 'healthToZero',
+      queenNode: {
+        healthPercent: 40,
+        collapseDrainMultiplier: 3.0,
+      },
+    },
+    // Host 04: The Rotting Elm — Two zones, active attacks introduced
+    '04': {
+      zones: [
+        { id: 'bark_layer', name: 'Bark Layer', healthPercent: 50 },
+        { id: 'heartwood', name: 'Heartwood', healthPercent: 50, unlockThreshold: 0.5 },
+      ],
+      defenseEventProfile: 'rare_high_impact',
+      activeAttackAvailable: true,
+      winCondition: 'healthToZero',
+    },
+    // Host 05: The Corvid — Three zones, stress cascade introduced
+    '05': {
+      zones: [
+        { id: 'peripheral_tissue', name: 'Peripheral Tissue', healthPercent: 40 },
+        { id: 'circulatory', name: 'Circulatory', healthPercent: 30, unlockThreshold: 0.4 },
+        { id: 'neural', name: 'Neural', healthPercent: 30, unlockThreshold: 0.7 },
+      ],
+      defenseEventProfile: 'time_sensitive',
+      activeAttackAvailable: true,
+      winCondition: 'healthToZero',
+      stress: {
+        cascadeThreshold: 0.7,
+        neuralStressReductionPct: 0.35,
+      },
+    },
+    // Host 06: The Boar — Three zones, vector mechanic introduced
+    '06': {
+      zones: [
+        { id: 'gut', name: 'Gut', healthPercent: 35 },
+        { id: 'circulatory', name: 'Circulatory', healthPercent: 35 },
+        { id: 'neural', name: 'Neural', healthPercent: 30 },
+      ],
+      defenseEventProfile: 'countermeasure_charges',
+      activeAttackAvailable: true,
+      winCondition: 'healthToZero',
+      vector: {
+        progressThreshold: 100,
+        bpsBonusPercent: 15,
+      },
+    },
+    // Host 07: The River Network — Three zones, seasonal cycle
+    '07': {
+      zones: [
+        { id: 'tributary_network', name: 'Tributary Network', healthPercent: 33 },
+        { id: 'main_channel', name: 'Main Channel', healthPercent: 34 },
+        { id: 'aquifer', name: 'Aquifer', healthPercent: 33 },
+      ],
+      defenseEventProfile: 'environmental',
+      activeAttackAvailable: true,
+      winCondition: 'healthToZero',
+      seasonal: {
+        durationSeconds: 120,
+        springEventFrequencyMultiplier: 1.5,
+        summerBpsBonusPercent: 20,
+        winterBpsPenaltyPercent: 30,
+        mainChannelAttackAreaPercent: 50,
+      },
+    },
+    // Host 08: The Old-Growth Forest — Four zones, rival network
+    '08': {
+      zones: [
+        { id: 'root_periphery', name: 'Root Periphery', healthPercent: 25 },
+        { id: 'canopy_interface', name: 'Canopy Interface', healthPercent: 25 },
+        { id: 'deep_network', name: 'Deep Network', healthPercent: 25 },
+        { id: 'heartroot', name: 'Heartroot', healthPercent: 25, unlockThreshold: 0.5 },
+      ],
+      defenseEventProfile: 'rival_network',
+      activeAttackAvailable: true,
+      winCondition: 'healthToZero',
+      rivalNetwork: {
+        zoneDecayRate: 0.02,
+        countermeasureFrequency: 0.1,
+        countermeasureBpsHaltSeconds: 10,
+      },
+    },
+    // Host 09: The Agricultural System — Four zones, chemical defense
+    '09': {
+      zones: [
+        { id: 'field_substrate', name: 'Field Substrate', healthPercent: 25 },
+        { id: 'storage_facilities', name: 'Storage Facilities', healthPercent: 25 },
+        { id: 'processing_network', name: 'Processing Network', healthPercent: 25 },
+        { id: 'distribution_chain', name: 'Distribution Chain', healthPercent: 25 },
+      ],
+      defenseEventProfile: 'chemical',
+      activeAttackAvailable: true,
+      winCondition: 'healthToZero',
+      supplyChain: {
+        bonusPercent: 25,
+      },
+    },
+    // Host 10: The Urban Microbiome — Five zones, human countermeasures
+    '10': {
+      zones: [
+        { id: 'urban_soil', name: 'Urban Soil', healthPercent: 20 },
+        { id: 'water_infrastructure', name: 'Water Infrastructure', healthPercent: 20 },
+        { id: 'food_systems', name: 'Food Systems', healthPercent: 20 },
+        { id: 'human_carriers', name: 'Human Carriers', healthPercent: 20 },
+        { id: 'research_institutions', name: 'Research Institutions', healthPercent: 20 },
+      ],
+      defenseEventProfile: 'human_countermeasures',
+      activeAttackAvailable: true,
+      winCondition: 'healthToZero',
+      researchZone: {
+        defenseReductionPercent: 0.15,
+      },
+      multiFront: {
+        stressThreshold: 0.6,
+      },
+    },
+    // Host 11: The Biosphere — Six zones, integration meter (inverted win)
+    '11': {
+      zones: [
+        { id: 'atmosphere', name: 'Atmosphere', healthPercent: 16.67 },
+        { id: 'hydrosphere', name: 'Hydrosphere', healthPercent: 16.67 },
+        { id: 'lithosphere', name: 'Lithosphere', healthPercent: 16.67 },
+        { id: 'biotic_layer', name: 'Biotic Layer', healthPercent: 16.67 },
+        { id: 'technosphere', name: 'Technosphere', healthPercent: 16.67 },
+        { id: 'noosphere', name: 'Noosphere', healthPercent: 16.67 },
+      ],
+      defenseEventProfile: 'extinction_class',
+      activeAttackAvailable: true,
+      winCondition: 'integrationMeter',
+      integrationMeter: {
+        maxValue: 1000,
+        zones: [
+          { id: 'atmosphere', name: 'Atmosphere', saturationThreshold: 200, contributionPerSecond: 1.0 },
+          { id: 'hydrosphere', name: 'Hydrosphere', saturationThreshold: 200, contributionPerSecond: 1.0 },
+          { id: 'lithosphere', name: 'Lithosphere', saturationThreshold: 150, contributionPerSecond: 0.8 },
+          { id: 'biotic_layer', name: 'Biotic Layer', saturationThreshold: 250, contributionPerSecond: 1.2 },
+          { id: 'technosphere', name: 'Technosphere', saturationThreshold: 100, contributionPerSecond: 0.5 },
+          { id: 'noosphere', name: 'Noosphere', saturationThreshold: 100, contributionPerSecond: 0.5 },
+        ],
+        extinctionEvents: {
+          frequencySeconds: 180,
+          meterRegressionPercent: 0.10,
+          responseWindowSeconds: 30,
+        },
+        integrationPulse: {
+          cost: 40,
+          durationSeconds: 20,
+          fillRateMultiplier: 2.0,
+          cooldownSeconds: 120,
+        },
+      },
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // DEFENSE EVENT SYSTEM — FAILURE STATES AND ESCALATING PRESSURE
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  DEFENSE_EVENTS: {
+    // Three-outcome countermeasure resolution
+    partialFailMitigationPercent: 0.50,
+    fullFailTimerExtensionSeconds: 5,
+    fullFailShareOfFailRate: 0.30,
+
+    // Base countermeasure fail rate (overridden per host)
+    countermeasureFailRateBase: 0.15,
+    // Countermeasure fail rates per host
+    countermeasureFailRateByHost: {
+      '02': 0.15,
+      '03': 0.20,
+      '04': 0.25,
+      '05': 0.28,
+      '06': 0.30,
+      '07': 0.32,
+      '08': 0.35,
+      '09': 0.38,
+      '10': 0.40,
+      '11': 0.45,
+    },
+
+    // Escalating pressure — deduction ramps over timer duration
+    rampCurve: 'exponential',
+    startDeductionPercent: 0.15,
+
+    // Defense event profiles per host type
+    profiles: {
+      none: { frequencyMultiplier: 0, severityMultiplier: 0 },
+      basic: { frequencyMultiplier: 1.0, severityMultiplier: 1.0 },
+      clustered: { frequencyMultiplier: 1.3, severityMultiplier: 1.1, clusterSize: 3 },
+      rare_high_impact: { frequencyMultiplier: 0.6, severityMultiplier: 1.5 },
+      time_sensitive: { frequencyMultiplier: 1.2, severityMultiplier: 1.2, partialFailEnabled: true },
+      countermeasure_charges: { frequencyMultiplier: 1.4, severityMultiplier: 1.3, chargeCost: 2 },
+      environmental: { frequencyMultiplier: 1.0, severityMultiplier: 1.0, seasonal: true },
+      rival_network: { frequencyMultiplier: 1.8, severityMultiplier: 1.6 },
+      chemical: { frequencyMultiplier: 1.5, severityMultiplier: 1.4, suppressionDurationSeconds: 15 },
+      human_countermeasures: { frequencyMultiplier: 2.0, severityMultiplier: 1.7, tier2Enabled: true },
+      extinction_class: { frequencyMultiplier: 2.5, severityMultiplier: 2.0, extinctionEnabled: true },
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ACTIVE ATTACK SYSTEM — ENZYME RESERVES
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  ENZYME_RESERVES: {
+    passiveGainRate: 0.1,
+    cap: 100,
+    grindReward: 5,
+  },
+
+  ACTIVE_ATTACKS: {
+    // Enzyme gain when player successfully suppresses a standard defense event
+    enzymeGainFromSuccessfulCountermeasure: 2,
+
+    // Base cost per host range (can be overridden per host)
+    costByHostRange: {
+      '04-06': { baseCost: 10, stressIncrement: 5 },
+      '07-08': { baseCost: 20, stressIncrement: 10 },
+      '09-10': { baseCost: 35, stressIncrement: 15 },
+      '11': { baseCost: 50, stressIncrement: 0 },
+    },
+    // BPS bonus percentage when active attack is used
+    bpsBonusPercent: 50,
+    // Cooldown between active attacks (milliseconds)
+    cooldownMs: 30_000,
+    // Zone-specific cost multipliers
+    zoneCostMultipliers: {
+      gut: 0.8,
+      peripheral_tissue: 1.0,
+      circulatory: 1.2,
+      neural: 1.5,
+      field_substrate: 0.8,
+      distribution_chain: 1.5,
+      human_carriers: 2.0,
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // HOST STRESS SYSTEM
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  HOST_STRESS: {
+    decayRatePerSecond: 0.5,
+    thresholds: {
+      threshold1: 30,
+      threshold2: 70,
+    },
+    effects: {
+      threshold1FrequencyMultiplier: 1.3,
+      threshold2SeverityMultiplier: 1.5,
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GRINDABLE EVENTS SYSTEM (Host 04+)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  GRIND_EVENTS: {
+    enabled: true,
+    unlockHost: 4,
+    timerSeconds: 45,
+    baseStatDeductionPercent: 15,
+    baseFailRate: 0.25,
+
+    enzymeRewardBase: 5,
+    enzymeRewardOnSuccess: 5,
+    enzymeRewardOnPartialFail: 2,
+    enzymeRewardOnFullFail: 0,
+
+    diminishingReturns: {
+      enabled: true,
+      reductionPerEvent: 0.10,
+      minRewardMultiplier: 0.25,
+    },
+
+    failRateEscalation: {
+      enabled: true,
+      increasePerEvent: 0.05,
+      maxFailRate: 0.60,
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TIER SYSTEM (Host 10+)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  EVENT_TIERS: {
+    tier2ScanUnlockHost: 10,
+    tier2PreemptiveSuccessRateBonus: 0.20,
+    tier2EscalationSeverityMultiplier: 1.5,
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PROACTIVE COUNTERMEASURE SYSTEM (Host 10+)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  PROACTIVE_COUNTERMEASURES: {
+    signalCost: 3,
+    durationMs: 60_000,
+    preemptiveSuccessRateBonus: 0.25,
+    matchingEvents: {
+      'preemptive-enzyme': ['fungicide-spray', 'soil-fumigation', 'biocontrol-application'],
+      'preemptive-biofilm': ['resistance-breaker', 'quarantine-protocol'],
+      'preemptive-signal': ['public-awareness-campaign', 'research-crackdown'],
+      'preemptive-quorum': ['regulatory-crackdown'],
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MULTI-FRONT EVENT SYSTEM (Host 10)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  MULTI_FRONT: {
+    extraEventCount: 2,
+    stressThresholdRatio: 0.6,
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // IMMEDIATE HIT EVENTS (Chemical/Fungicide - Host 09-10)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  IMMEDIATE_HIT_EVENTS: [
+    'fungicide-spray',
+    'soil-fumigation',
+    'biocontrol-application',
+    'resistance-breaker',
+    'quarantine-protocol',
+    'research-crackdown',
+    'public-awareness-campaign',
+    'regulatory-crackdown',
+  ] as import('../lib/game').DefenseEventId[],
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SUPPLY CHAIN SPREAD (Host 09 → 10)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  SUPPLY_CHAIN_SPREAD: {
+    bonusCarryoverPercent: 50,
+    zoneStartHealthBonus: 10,
+  },
 
   // Skill costs keyed by skill ID (all biomass costs)
   SKILL_COSTS: {
@@ -319,28 +720,18 @@ export const BALANCE = {
   // At 50% falloff the drop feels too harsh; at 75% the cap barely matters.
   SOFT_CAP_FALLOFF: 0.65,
 
-  // --- Stat Base Values ---
-  // 15% click bonus: At 3 points with synergy, Parasite gets ~60% click boost
-  // which feels significant without overshadowing generators.
-  VIRULENCE_CLICK_BONUS_PER_POINT: 0.15,
-  // Threshold bonus at 25%: Reward for committing to 3 points in a stat.
-  // Applies after synergy multipliers for maximum impact.
-  VIRULENCE_THRESHOLD_BONUS: 0.25,
-  VIRULENCE_THRESHOLD: 3,
-  // 8% defense mitigation: At 3 points with synergy, Saprophyte gets ~32% mitigation
-  // which meaningfully extends event survival without trivializing defenses.
-  RESILIENCE_DEFENSE_PER_POINT: 0.08,
-  // 5% BPS per point: Modest but stacking. At 5 points with synergy, ~33% BPS boost.
-  COMPLEXITY_PASSIVE_PER_POINT: 0.05,
-  // 2% upgrade effectiveness: Subtle but compounds with other bonuses.
-  COMPLEXITY_UPGRADE_EFFECTIVENESS_PER_POINT: 0.02,
-
   // --- Strain-Stat Interaction Multipliers ---
   // 35% synergy bonus: Creates meaningful identity. Aligned stat feels "correct".
   STRAIN_SYNERGY_MULTIPLIER: 1.35,
   // 30% opposition penalty: Opposed stat still viable but clearly suboptimal.
   // 0.70 (vs 1.35) creates a ~2x power gap which defines build identity.
   STRAIN_OPPOSITION_MULTIPLIER: 0.70,
+
+  // --- Stat Thresholds ---
+  // Virulence threshold for bonus application
+  VIRULENCE_THRESHOLD: 3,
+  // Resilience defense per point for stat synergy calculations
+  RESILIENCE_DEFENSE_PER_POINT: 0.08,
 
   // --- Saprophyte Unique Mechanics ---
   // 3% BPS per Resilience: Makes Resilience economically interesting for Saprophyte
@@ -395,4 +786,15 @@ export const BALANCE = {
   DECOMPOSITION_BASE_CONVERSION_RATE: 0.15,
   // Each Resilience point adds 3%: At 5 Resilience, 15% + 15% = 30% conversion.
   DECOMPOSITION_RESILIENCE_BONUS_PER_POINT: 0.03,
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FLAVOR MESSAGE SYSTEM
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  FLAVOR_MESSAGES: {
+    enabled: true,
+    displayDurationSeconds: 4,
+    queueMaxSize: 3,
+    showOnlyFirstRun: false,
+  },
 };

@@ -134,12 +134,12 @@
     {#if !hostCompleted}
       <div class="host-strip__veins" style="opacity: {veinOpacity}">
         <svg viewBox="0 0 200 60" preserveAspectRatio="none">
-          <path d="M0,38 H20 V18 H45 V38 H65 V18 H90 V38 H115 V18 H140 V38 H165 V18 H200" stroke="#be8f2f" stroke-width="0.8" fill="none" opacity="0.7"/>
-          <path d="M0,12 H15 V28 H35 V12 H55 V28 H80 V12 H105 V28 H130 V12 H160 V28 H185 V12 H200" stroke="#ad8a0d" stroke-width="0.7" fill="none" opacity="0.5"/>
-          <path d="M0,50 H25 V32 H50 V50 H80 V32 H110 V50 H135 V32 H170 V50 H200" stroke="#d4a017" stroke-width="0.75" fill="none" opacity="0.6"/>
-          <path d="M5,8 H30 V22 H55 V8 H85 V22 H110 V8 H145 V22 H175 V8 H200" stroke="#8b6914" stroke-width="0.5" fill="none" opacity="0.4"/>
-          <path d="M0,42 H18 V54 H42 V42 H68 V54 H95 V42 H120 V54 H148 V42 H178 V54 H200" stroke="#c4920a" stroke-width="0.45" fill="none" opacity="0.45"/>
-          <path d="M10,56 H38 V44 H60 V56 H90 V44 H118 V56 H150 V44 H180 V56 H200" stroke="#a67c00" stroke-width="0.4" fill="none" opacity="0.35"/>
+          <path d="M0,38 Q12.5,18 25,38 T75,18 T125,38 T175,18 T200,38" stroke="#be8f2f" stroke-width="0.8" fill="none" opacity="0.7"/>
+          <path d="M0,20 Q12.5,12 25,20 T75,28 T125,12 T175,28 T200,20" stroke="#ad8a0d" stroke-width="0.7" fill="none" opacity="0.5"/>
+          <path d="M0,41 Q12.5,32 25,41 T75,50 T125,32 T175,50 T200,41" stroke="#d4a017" stroke-width="0.75" fill="none" opacity="0.6"/>
+          <path d="M5,15 Q20,8 35,15 T85,22 T135,8 T185,22 T200,15" stroke="#8b6914" stroke-width="0.5" fill="none" opacity="0.4"/>
+          <path d="M0,48 Q9,42 18,48 T68,54 T118,42 T168,54 T200,48" stroke="#c4920a" stroke-width="0.45" fill="none" opacity="0.45"/>
+          <path d="M10,50 Q24,44 38,50 T90,56 T150,44 T200,56 T200,50" stroke="#a67c00" stroke-width="0.4" fill="none" opacity="0.35"/>
         </svg>
       </div>
 

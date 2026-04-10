@@ -7,6 +7,7 @@
   import SignalPanel from './lib/SignalPanel.svelte'
   import DefenseToast from './components/DefenseToast.svelte'
   import HostVisual from './components/HostVisual.svelte'
+  import GrindPanel from './components/GrindPanel.svelte'
   import { wikiEntries, wikiSections } from './lib/wiki'
   import { game, _pendingOfflineNarrative } from './stores/gameStore'
   import {
@@ -658,7 +659,36 @@
   function getCountermeasureCoverage(countermeasureId: CountermeasureId): string {
     const definition = countermeasureDefinitions.find((entry: (typeof countermeasureDefinitions)[number]) => entry.id === countermeasureId)
     if (!definition) return ''
-    return definition.targetEventIds.map((eventId: DefenseEventId) => getDefenseEventLabel(eventId)).join(' / ')
+    const full = definition.targetEventIds.map((eventId: DefenseEventId) => getDefenseEventLabel(eventId))
+    const partial = definition.partialEventIds.map((eventId: DefenseEventId) => getDefenseEventLabel(eventId))
+    const parts: string[] = []
+    if (full.length > 0) parts.push(`Full: ${full.join(', ')}`)
+    if (partial.length > 0) parts.push(`Partial: ${partial.join(', ')}`)
+    return parts.join(' | ')
+  }
+
+  function getCountermeasureFullCoverage(countermeasureId: CountermeasureId): string {
+    const definition = countermeasureDefinitions.find((entry: (typeof countermeasureDefinitions)[number]) => entry.id === countermeasureId)
+    if (!definition) return ''
+    return definition.targetEventIds.map((eventId: DefenseEventId) => getDefenseEventLabel(eventId)).join(', ')
+  }
+
+  function getCountermeasurePartialCoverage(countermeasureId: CountermeasureId): string {
+    const definition = countermeasureDefinitions.find((entry: (typeof countermeasureDefinitions)[number]) => entry.id === countermeasureId)
+    if (!definition) return ''
+    return definition.partialEventIds.map((eventId: DefenseEventId) => getDefenseEventLabel(eventId)).join(', ')
+  }
+
+  function getDefenseStatusLabel(): string {
+    if ($game.activeDefenseEvents.length === 0) return ''
+    const activeEvent = $game.activeDefenseEvents[0]
+    const equipped = $game.equippedCountermeasure
+    if (!equipped) return 'Vulnerable'
+    const def = countermeasureDefinitions.find((c) => c.id === equipped)
+    if (!def) return 'Vulnerable'
+    if (def.targetEventIds.includes(activeEvent.id)) return 'Defended'
+    if (def.partialEventIds.includes(activeEvent.id)) return 'Partial'
+    return 'Vulnerable'
   }
 
   function getDynamicTransitionSignal(): string {
@@ -1031,25 +1061,30 @@
                   {#if forecastCountdownLabel !== null}
                     <p class="analysis-panel__flavor analysis-panel__flavor--alert">{forecastCountdownLabel}</p>
                   {/if}
-                  <div class="analysis-panel__meta">
-                    <p>Likely Threat :: {getLikelyThreatForecast()}</p>
-                    <p>Equipped Countermeasure :: {getEquippedCountermeasure()?.name.toUpperCase() ?? 'UNASSIGNED'}</p>
-                  </div>
-                  {#if $game.equippedCountermeasure === null}
+                  {#if $game.activeDefenseEvents.length > 0}
+                    <p class="analysis-panel__flavor analysis-panel__flavor--alert">Status: {getDefenseStatusLabel()}</p>
+                  {:else if $game.equippedCountermeasure === null}
                     <p class="analysis-panel__flavor">Choose one countermeasure for this run. Once selected, it locks until Spore Release.</p>
                   {/if}
                   <div class="strain-grid defense-control__grid">
                     {#each countermeasureDefinitions as countermeasure}
+                      {@const isActive = $game.equippedCountermeasure === countermeasure.id}
+                      {@const isLocked = $game.activeDefenseEvents.length > 0 && !isActive}
                       <button
                         class="strain-card"
-                        class:strain-card--locked={$game.equippedCountermeasure !== null && $game.equippedCountermeasure !== countermeasure.id}
-                        disabled={$game.equippedCountermeasure !== null}
+                        class:strain-card--locked={isLocked}
+                        disabled={isLocked}
                         type="button"
                         on:click={() => game.equipCountermeasure(countermeasure.id)}
+                        style={isActive ? `background-color: ${countermeasure.uiAccentColor}20;` : ''}
                       >
                         <strong>{countermeasure.name}</strong>
                         <span>{countermeasure.description}</span>
-                        <small>Covers {getCountermeasureCoverage(countermeasure.id)}</small>
+                        {#if isActive && countermeasure.flavorLine}
+                          <em><small>{countermeasure.flavorLine}</small></em>
+                        {/if}
+                        <small>Full: {getCountermeasureFullCoverage(countermeasure.id)}</small>
+                        <small>Partial: {getCountermeasurePartialCoverage(countermeasure.id)}</small>
                       </button>
                     {/each}
                   </div>
@@ -1172,6 +1207,13 @@
             </TerminalPanel>
             </div>
             {/if}
+
+            <GrindPanel state={$game}
+              on:startGrind={() => game.startGrindSession()}
+              on:triggerGrind={() => game.grindEvent()}
+              on:scanDefense={() => game.scanDefenseEvent()}
+              on:setPreemptive={() => game.setPreemptiveCountermeasure()}
+            />
           </div>
           {:else}
             <div class="sidebar-log">
@@ -1311,22 +1353,30 @@
             {#if forecastCountdownLabel !== null}
               <p class="mobile-analysis__flavor mobile-analysis__flavor--alert">{forecastCountdownLabel}</p>
             {/if}
-            <p class="mobile-analysis__flavor">Likely Threat :: {getLikelyThreatForecast()}</p>
-            <p class="mobile-analysis__flavor">Countermeasure :: {getEquippedCountermeasure()?.name.toUpperCase() ?? 'UNASSIGNED'}</p>
-            {#if $game.equippedCountermeasure === null}
+            {#if $game.activeDefenseEvents.length > 0}
+              <p class="mobile-analysis__flavor mobile-analysis__flavor--alert">Status: {getDefenseStatusLabel()}</p>
+            {:else if $game.equippedCountermeasure === null}
               <p class="mobile-analysis__flavor">Choose one countermeasure for this run. Once selected, it locks until Spore Release.</p>
             {/if}
             <div class="mobile-strain-list defense-control__list">
               {#each countermeasureDefinitions as countermeasure}
+                {@const isActive = $game.equippedCountermeasure === countermeasure.id}
+                {@const isLocked = $game.activeDefenseEvents.length > 0 && !isActive}
                 <button
                   class="mobile-strain-button"
-                  class:mobile-strain-button--locked={$game.equippedCountermeasure !== null && $game.equippedCountermeasure !== countermeasure.id}
-                  disabled={$game.equippedCountermeasure !== null}
+                  class:mobile-strain-button--locked={isLocked}
+                  disabled={isLocked}
                   type="button"
                   on:click={() => game.equipCountermeasure(countermeasure.id)}
+                  style={isActive ? `background-color: ${countermeasure.uiAccentColor}20;` : ''}
                 >
                   <strong>{countermeasure.name.toUpperCase()}</strong>
                   <span>{countermeasure.description}</span>
+                  {#if isActive && countermeasure.flavorLine}
+                    <em><small>{countermeasure.flavorLine}</small></em>
+                  {/if}
+                  <small>Full: {getCountermeasureFullCoverage(countermeasure.id)}</small>
+                  <small>Partial: {getCountermeasurePartialCoverage(countermeasure.id)}</small>
                 </button>
               {/each}
             </div>
@@ -1493,8 +1543,8 @@
                     </div>
                     <p>Synaptic mapping. Improves passive output and upgrade efficiency.</p>
                     {#if $game.mutationPoints > 0}
-                      {@const currentBonus = getEffectiveStatBonus($game.stats.complexity, BALANCE.COMPLEXITY_PASSIVE_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
-                      {@const nextBonus = getEffectiveStatBonus($game.stats.complexity + 1, BALANCE.COMPLEXITY_PASSIVE_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
+                      {@const currentBonus = getEffectiveStatBonus($game.stats.complexity, BALANCE.COMPLEXITY_PASSIVE_BONUS_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
+                      {@const nextBonus = getEffectiveStatBonus($game.stats.complexity + 1, BALANCE.COMPLEXITY_PASSIVE_BONUS_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
                       {@const increase = ((nextBonus - currentBonus) * 100) || (nextBonus * 100)}
                       <p class="stat-preview">Next: Passive BPS +{increase.toFixed(1)}%</p>
                     {/if}

@@ -18,7 +18,16 @@ import type {
   GameState,
   VisibilityState,
   HostEchoType,
+  HostId,
+  ZoneState,
+  HostStressState,
+  SeasonalState,
+  RivalNetworkState,
+  IntegrationZoneState,
+  ActiveAttackState,
+  ProactiveCountermeasureId,
 } from '../lib/game'
+import { hostDefinitions } from '../lib/game'
 
 function createDefaultVisibilityState(): VisibilityState {
   return {
@@ -43,8 +52,37 @@ function createDefaultVisibilityState(): VisibilityState {
   }
 }
 
+function createInitialZones(stage: number): ZoneState[] {
+  const hostDef = hostDefinitions.find(h => h.stage === stage)
+  if (!hostDef) return []
+
+  return hostDef.zones.map(zone => {
+    const zoneMaxHealth = BALANCE.HOST_HEALTH[stage - 1] * (zone.healthPercent / 100)
+    return {
+      id: zone.id,
+      name: zone.name,
+      health: new Decimal(zoneMaxHealth),
+      maxHealth: new Decimal(zoneMaxHealth),
+      isUnlocked: zone.unlockThreshold === undefined,
+      compromisePercent: 0,
+    }
+  })
+}
+
+function createInitialIntegrationZones(): IntegrationZoneState[] {
+  return [
+    { zoneId: 'atmosphere', saturationPercent: 0, isLocked: true, contributionRate: 0 },
+    { zoneId: 'hydrosphere', saturationPercent: 0, isLocked: true, contributionRate: 0 },
+    { zoneId: 'lithosphere', saturationPercent: 0, isLocked: true, contributionRate: 0 },
+    { zoneId: 'biotic_layer', saturationPercent: 0, isLocked: true, contributionRate: 0 },
+    { zoneId: 'technosphere', saturationPercent: 0, isLocked: true, contributionRate: 0 },
+    { zoneId: 'noosphere', saturationPercent: 0, isLocked: true, contributionRate: 0 },
+  ]
+}
+
 export function createDefaultState(): GameState {
   const now = Date.now()
+  const initialHost = hostDefinitions[0]
 
   return {
     biomass: new Decimal(0),
@@ -61,9 +99,9 @@ export function createDefaultState(): GameState {
     hasPrestiged: false,
     currentStage: 1,
     highestStageReached: 1,
-    hostName: 'Dead Leaf',
-    stageLabel: 'Germination',
-    subtitle: "The Leaf Doesn't Notice",
+    hostName: initialHost.name,
+    stageLabel: initialHost.stageLabel,
+    subtitle: initialHost.subtitle,
     hostHealth: new Decimal(BALANCE.HOST_HEALTH[0]),
     hostMaxHealth: new Decimal(BALANCE.HOST_HEALTH[0]),
     hostCompleted: false,
@@ -132,6 +170,31 @@ export function createDefaultState(): GameState {
       accumulatedBonus: 0,
     },
     nextMycorrhizalPulseAt: null,
+    zones: createInitialZones(1),
+    currentHostId: '01',
+    enzymeReserves: 0,
+    hostStress: {
+      currentStress: 0,
+      lastAttackTime: 0,
+    },
+    seasonalState: null,
+    rivalNetworkState: null,
+    integrationZones: createInitialIntegrationZones(),
+    integrationMeter: 0,
+    activeAttack: null,
+    integrationPulse: null,
+    vectorProgress: 0,
+    activeGrindSession: {
+      eventCount: 0,
+      windowStartTime: now,
+    },
+    runGrindEventCount: 0,
+    proactiveCountermeasure: null,
+    proactiveCountermeasureEndAt: 0,
+    tier2ScanActive: false,
+    tier2ScannedEventId: null,
+    tier2PreemptiveSet: false,
+    supplyChainBonusActive: false,
   }
 }
 

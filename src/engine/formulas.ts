@@ -6,13 +6,14 @@
 
 import Decimal from 'break_eternity.js'
 import { BALANCE } from './balance.config'
-import type { DefenseEventId, GameState, GeneratorId, UpgradeId, SkillId, StrainId, StatId } from '../lib/game'
+import type { DefenseEventId, GameState, GeneratorId, UpgradeId, SkillId, StrainId, StatId, IntegrationZoneState } from '../lib/game'
 import {
   generatorDefinitions,
   upgradeDefinitions,
   strainDefinitions,
   skillDefinitions,
   hostDefinitions,
+  countermeasureDefinitions,
 } from '../lib/game'
 
 // Local lookup helpers (pure, no side effects)
@@ -391,15 +392,26 @@ export function getDefenseMitigation(state: GameState): number {
 function getCountermeasureMitigationBonus(state: GameState, eventId?: DefenseEventId): number {
   if (!eventId || !state.equippedCountermeasure) return 0
 
-  if (state.equippedCountermeasure === 'moisture-buffer' && eventId === 'drought') {
-    return BALANCE.COUNTERMEASURE_MOISTURE_BUFFER_MITIGATION
+  const definition = countermeasureDefinitions.find((c) => c.id === state.equippedCountermeasure)
+  if (!definition) return 0
+
+  let baseMitigation = 0
+  if (definition.targetEventIds.includes(eventId)) {
+    baseMitigation = BALANCE.COUNTERMEASURE_FULL_MITIGATION
+  } else if (definition.partialEventIds.includes(eventId)) {
+    baseMitigation = BALANCE.COUNTERMEASURE_PARTIAL_MITIGATION
+  } else {
+    return 0
   }
 
-  if (state.equippedCountermeasure === 'immune-mimicry' && eventId === 'immune-response') {
-    return BALANCE.COUNTERMEASURE_IMMUNE_MIMICRY_MITIGATION
-  }
+  const resilienceBonus = state.stats.resilience * BALANCE.COUNTERMEASURE_RESILIENCE_BONUS_PER_POINT
 
-  return 0
+  const totalMitigation = Math.min(
+    BALANCE.COUNTERMEASURE_TIER_MITIGATION_CAP,
+    baseMitigation + resilienceBonus
+  )
+
+  return totalMitigation
 }
 
 export function getMitigatedPenaltyMultiplier(baseMultiplier: Decimal, state: GameState, eventId?: DefenseEventId): Decimal {
@@ -454,7 +466,7 @@ export function getPassiveStatMultiplier(state: GameState): Decimal {
   // Use new synergy-aware calculation for Complexity
   const complexityBonus = getEffectiveStatBonus(
     state.stats.complexity,
-    BALANCE.COMPLEXITY_PASSIVE_PER_POINT,
+    BALANCE.COMPLEXITY_PASSIVE_BONUS_PER_POINT,
     state.strain,
     'complexity',
     state.geneticMemoryStats
@@ -606,6 +618,31 @@ export function getProductionMultiplier(state: GameState, generatorId: Generator
   const efficientCount = echoBonuses.filter((e) => e === 'efficient').length
   if (efficientCount > 0) {
     multiplier = multiplier.mul(1 + efficientCount * BALANCE.HOST_ECHO_BONUS_EFFICIENT)
+  }
+
+  if (state.activeAttack?.isActive) {
+    multiplier = multiplier.mul(state.activeAttack.bpsBonusMultiplier)
+  }
+
+  if (state.currentStage === 7 && state.seasonalState) {
+    const seasonBpsModifier = getSeasonalBPSModifier(state.seasonalState.currentSeason)
+    multiplier = multiplier.mul(seasonBpsModifier)
+  }
+
+  if (state.currentStage === 8 && state.activeAttack?.zoneId) {
+    const targetedZone = state.zones.find(z => z.id === state.activeAttack!.zoneId)
+    if (targetedZone) {
+      multiplier = multiplier.mul(getRivalControlZoneMultiplier(targetedZone))
+    }
+  }
+
+  if (state.currentStage === 10 && state.supplyChainBonusActive) {
+    const supplyChainBonus = getSupplyChainBPSBonus(10, state.supplyChainBonusActive)
+    multiplier = multiplier.mul(1 + supplyChainBonus)
+  }
+
+  if (state.currentStage === 11 && state.integrationPulse?.isActive) {
+    multiplier = multiplier.mul(getIntegrationPulseBPSMultiplier())
   }
 
   return multiplier
@@ -1006,7 +1043,11 @@ export function debugEfficiencyCliff() {
 // --- HELPER: can release spores ---
 
 export function canReleaseSpores(state: GameState): boolean {
-  return state.currentStage === hostDefinitions.length && state.hostCompleted
+  if (state.currentStage !== hostDefinitions.length) return false
+  if (state.currentStage === 11) {
+    return state.integrationMeter >= getIntegrationMeterMax()
+  }
+  return state.hostCompleted
 }
 
 export function hasNextStage(state: GameState): boolean {
@@ -1019,4 +1060,751 @@ export function getCurrentHostDefinition(state: GameState) {
 
 export function getThreatLevelLabel(level: string): string {
   return level.toUpperCase()
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ZONE SYSTEM FORMULAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getZoneCompromisePercent(zone: { health: Decimal; maxHealth: Decimal }): number {
+  if (zone.maxHealth.lte(0)) return 100
+  const consumed = zone.maxHealth.sub(zone.health)
+  return Math.min(100, Math.max(0, consumed.div(zone.maxHealth).mul(100).toNumber()))
+}
+
+export function isZoneUnlocked(zone: { isUnlocked: boolean; compromisePercent?: number }, threshold?: number): boolean {
+  if (zone.isUnlocked) return true
+  if (threshold === undefined) return false
+  return (zone.compromisePercent ?? 0) >= threshold * 100
+}
+
+export function getHostCompromisePercent(state: GameState): number {
+  if (state.zones.length === 0) {
+    return getHostProgress(state)
+  }
+  const totalCompromise = state.zones.reduce((sum, zone) => sum + getZoneCompromisePercent(zone), 0)
+  return totalCompromise / state.zones.length
+}
+
+export function getZoneDamageContribution(zone: { compromisePercent: number }, totalCompromise: number): Decimal {
+  return new Decimal(zone.compromisePercent / 100)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENZYME RESERVE FORMULAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getEnzymeReserveCap(state: GameState): number {
+  return BALANCE.ENZYME_RESERVES.cap
+}
+
+export function getEnzymePassiveGainRate(): number {
+  return BALANCE.ENZYME_RESERVES.passiveGainRate
+}
+
+export function getEnzymeGrindReward(): number {
+  return BALANCE.ENZYME_RESERVES.grindReward
+}
+
+export function canAffordActiveAttack(state: GameState, zoneId?: string): boolean {
+  const cost = getActiveAttackCost(state, zoneId)
+  return state.enzymeReserves >= cost
+}
+
+export function getActiveAttackCost(state: GameState, zoneId?: string): number {
+  const hostId = String(state.currentStage).padStart(2, '0') as keyof typeof BALANCE.HOSTS
+  const hostConfig = BALANCE.HOSTS[hostId]
+  if (!hostConfig || !hostConfig.activeAttackAvailable) return Infinity
+
+  let baseCost: number
+  if (state.currentStage >= 4 && state.currentStage <= 6) {
+    baseCost = BALANCE.ACTIVE_ATTACKS.costByHostRange['04-06'].baseCost
+  } else if (state.currentStage >= 7 && state.currentStage <= 8) {
+    baseCost = BALANCE.ACTIVE_ATTACKS.costByHostRange['07-08'].baseCost
+  } else if (state.currentStage >= 9 && state.currentStage <= 10) {
+    baseCost = BALANCE.ACTIVE_ATTACKS.costByHostRange['09-10'].baseCost
+  } else {
+    baseCost = BALANCE.ACTIVE_ATTACKS.costByHostRange['11'].baseCost
+  }
+
+  if (zoneId && zoneId in BALANCE.ACTIVE_ATTACKS.zoneCostMultipliers) {
+    baseCost *= BALANCE.ACTIVE_ATTACKS.zoneCostMultipliers[zoneId as keyof typeof BALANCE.ACTIVE_ATTACKS.zoneCostMultipliers]
+  }
+
+  return Math.floor(baseCost)
+}
+
+export function getActiveAttackBPSBonus(): number {
+  return BALANCE.ACTIVE_ATTACKS.bpsBonusPercent / 100
+}
+
+export function getActiveAttackCooldown(): number {
+  return BALANCE.ACTIVE_ATTACKS.cooldownMs
+}
+
+export function getActiveAttackStressIncrement(state: GameState): number {
+  if (state.currentStage >= 4 && state.currentStage <= 6) {
+    return BALANCE.ACTIVE_ATTACKS.costByHostRange['04-06'].stressIncrement
+  } else if (state.currentStage >= 7 && state.currentStage <= 8) {
+    return BALANCE.ACTIVE_ATTACKS.costByHostRange['07-08'].stressIncrement
+  } else if (state.currentStage >= 9 && state.currentStage <= 10) {
+    return BALANCE.ACTIVE_ATTACKS.costByHostRange['09-10'].stressIncrement
+  }
+  return 0
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HOST STRESS FORMULAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getHostStressDecayRate(): number {
+  return BALANCE.HOST_STRESS.decayRatePerSecond
+}
+
+export function getHostStressThreshold1(): number {
+  return BALANCE.HOST_STRESS.thresholds.threshold1
+}
+
+export function getHostStressThreshold2(): number {
+  return BALANCE.HOST_STRESS.thresholds.threshold2
+}
+
+export function getHostStressFrequencyMultiplier(stress: number): number {
+  if (stress >= getHostStressThreshold2()) {
+    return BALANCE.HOST_STRESS.effects.threshold2SeverityMultiplier
+  }
+  if (stress >= getHostStressThreshold1()) {
+    return BALANCE.HOST_STRESS.effects.threshold1FrequencyMultiplier
+  }
+  return 1.0
+}
+
+export function getHostStressSeverityMultiplier(stress: number): number {
+  if (stress >= getHostStressThreshold2()) {
+    return BALANCE.HOST_STRESS.effects.threshold2SeverityMultiplier
+  }
+  return 1.0
+}
+
+export function isHostUnderStress(state: GameState): boolean {
+  return state.hostStress.currentStress >= getHostStressThreshold1()
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEFENSE EVENT FAILURE STATE FORMULAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getCountermeasureFailRate(stage: number): number {
+  const hostId = String(stage).padStart(2, '0') as keyof typeof BALANCE.DEFENSE_EVENTS.countermeasureFailRateByHost
+  const rate = BALANCE.DEFENSE_EVENTS.countermeasureFailRateByHost[hostId]
+  return rate ?? BALANCE.DEFENSE_EVENTS.countermeasureFailRateBase
+}
+
+export function getDefenseEventFrequencyMultiplier(stage: number): number {
+  const hostId = String(stage).padStart(2, '0') as keyof typeof BALANCE.HOSTS
+  const hostConfig = BALANCE.HOSTS[hostId]
+  if (!hostConfig) return 1.0
+  const profile = BALANCE.DEFENSE_EVENTS.profiles[hostConfig.defenseEventProfile as keyof typeof BALANCE.DEFENSE_EVENTS.profiles]
+  return profile?.frequencyMultiplier ?? 1.0
+}
+
+export function getDefenseEventSeverityMultiplier(stage: number): number {
+  const hostId = String(stage).padStart(2, '0') as keyof typeof BALANCE.HOSTS
+  const hostConfig = BALANCE.HOSTS[hostId]
+  if (!hostConfig) return 1.0
+  const profile = BALANCE.DEFENSE_EVENTS.profiles[hostConfig.defenseEventProfile as keyof typeof BALANCE.DEFENSE_EVENTS.profiles]
+  return profile?.severityMultiplier ?? 1.0
+}
+
+export function getDefenseEventProfile(stage: number): string {
+  const hostId = String(stage).padStart(2, '0') as keyof typeof BALANCE.HOSTS
+  const hostConfig = BALANCE.HOSTS[hostId]
+  return hostConfig?.defenseEventProfile ?? 'basic'
+}
+
+export function isDefenseEventProfileActive(stage: number): boolean {
+  const profile = getDefenseEventProfile(stage)
+  return profile !== 'none'
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VECTOR PROGRESS FORMULAS (HOST 06, 09)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getVectorProgressThreshold(stage: number): number {
+  if (stage === 6) {
+    return BALANCE.HOSTS['06'].vector.progressThreshold
+  }
+  if (stage === 9) {
+    return BALANCE.HOSTS['09'].supplyChain.bonusPercent
+  }
+  return Infinity
+}
+
+export function getVectorBPSBonus(stage: number): number {
+  if (stage === 6) {
+    return BALANCE.HOSTS['06'].vector.bpsBonusPercent / 100
+  }
+  if (stage === 9) {
+    return BALANCE.HOSTS['09'].supplyChain.bonusPercent / 100
+  }
+  return 0
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SEASONAL CYCLE FORMULAS (HOST 07)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type Season = 'spring' | 'summer' | 'autumn' | 'winter'
+
+export function getSeasonDurationSeconds(): number {
+  return BALANCE.HOSTS['07'].seasonal.durationSeconds
+}
+
+export function getSeasonFromIndex(index: number): Season {
+  const seasons: Season[] = ['spring', 'summer', 'autumn', 'winter']
+  return seasons[index % 4]
+}
+
+export function getSeasonalBPSModifier(season: Season): number {
+  switch (season) {
+    case 'spring':
+      return 1.0
+    case 'summer':
+      return 1 + (BALANCE.HOSTS['07'].seasonal.summerBpsBonusPercent / 100)
+    case 'autumn':
+      return 1.0
+    case 'winter':
+      return 1 - (BALANCE.HOSTS['07'].seasonal.winterBpsPenaltyPercent / 100)
+  }
+}
+
+export function getSeasonalEventFrequencyMultiplier(season: Season): number {
+  switch (season) {
+    case 'spring':
+      return BALANCE.HOSTS['07'].seasonal.springEventFrequencyMultiplier
+    case 'summer':
+      return 0.7
+    case 'autumn':
+      return 1.0
+    case 'winter':
+      return 1.2
+  }
+}
+
+export function getMainChannelAttackAreaPercent(): number {
+  return BALANCE.HOSTS['07'].seasonal.mainChannelAttackAreaPercent / 100
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RIVAL NETWORK FORMULAS (HOST 08)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getRivalZoneDecayRate(): number {
+  return BALANCE.HOSTS['08'].rivalNetwork.zoneDecayRate
+}
+
+export function getRivalCountermeasureFrequency(): number {
+  return BALANCE.HOSTS['08'].rivalNetwork.countermeasureFrequency
+}
+
+export function getRivalCountermeasureBpsHaltSeconds(): number {
+  return BALANCE.HOSTS['08'].rivalNetwork.countermeasureBpsHaltSeconds
+}
+
+export function getHeartrootUnlockThreshold(): number {
+  return BALANCE.HOSTS['08'].zones[3].unlockThreshold ?? 0.5
+}
+
+export function isRivalNetworkSuppressed(state: GameState): boolean {
+  return state.currentStage === 8 && state.rivalNetworkState?.isSuppressing === true
+}
+
+export function getRivalControlZoneMultiplier(zone: { isRivalControlled?: boolean }): number {
+  if (!zone.isRivalControlled) return 1.0
+  return 0.5
+}
+
+export function isZoneRivalControlled(state: GameState, zoneId: string): boolean {
+  if (state.currentStage !== 8) return false
+  const zone = state.zones.find(z => z.id === zoneId)
+  return zone?.isRivalControlled ?? false
+}
+
+export function getRivalDisruptionBPSBonus(): number {
+  return 0.25
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RESEARCH INSTITUTIONS FORMULAS (HOST 10)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getResearchZoneDefenseReduction(): number {
+  return BALANCE.HOSTS['10'].researchZone.defenseReductionPercent
+}
+
+export function getMultiFrontStressThreshold(): number {
+  return BALANCE.HOSTS['10'].multiFront.stressThreshold
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QUEEN NODE FORMULAS (HOST 03)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getQueenNodeHealthPercent(): number {
+  return BALANCE.HOSTS['03'].queenNode.healthPercent
+}
+
+export function getQueenNodeCollapseDrainMultiplier(): number {
+  return BALANCE.HOSTS['03'].queenNode.collapseDrainMultiplier
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NEURAL ZONE FORMULAS (HOST 05)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getNeuralStressReductionPercent(): number {
+  return BALANCE.HOSTS['05'].stress.neuralStressReductionPct
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROACTIVE COUNTERMEASURE FORMULAS (HOST 10+)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getProactiveCountermeasureCost(): number {
+  return BALANCE.PROACTIVE_COUNTERMEASURES.signalCost
+}
+
+export function getProactiveCountermeasureDurationMs(): number {
+  return BALANCE.PROACTIVE_COUNTERMEASURES.durationMs
+}
+
+export function getProactiveCountermeasureSuccessBonus(): number {
+  return BALANCE.PROACTIVE_COUNTERMEASURES.preemptiveSuccessRateBonus
+}
+
+export function getProactiveCountermeasureMatchingEvents(countermeasureId: import('../lib/game').ProactiveCountermeasureId): string[] {
+  return BALANCE.PROACTIVE_COUNTERMEASURES.matchingEvents[countermeasureId] ?? []
+}
+
+export function isProactiveCountermeasureActive(state: GameState, now: number): boolean {
+  return state.proactiveCountermeasure !== null && now < state.proactiveCountermeasureEndAt && state.proactiveCountermeasureEndAt > 0
+}
+
+export function doesProactiveCountermeasureMatchEvent(countermeasureId: import('../lib/game').ProactiveCountermeasureId, eventId: DefenseEventId): boolean {
+  const matchingEvents = getProactiveCountermeasureMatchingEvents(countermeasureId)
+  return matchingEvents.includes(eventId)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIER 2 SCANNING FORMULAS (HOST 10)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function isTier2ScanningAvailable(stage: number): boolean {
+  return stage >= BALANCE.EVENT_TIERS.tier2ScanUnlockHost
+}
+
+export function getTier2ScanCost(): number {
+  return BALANCE.PROACTIVE_COUNTERMEASURES.signalCost
+}
+
+export function getTier2PreemptiveBonus(): number {
+  return BALANCE.EVENT_TIERS.tier2PreemptiveSuccessRateBonus
+}
+
+export function isTier2BonusApplied(state: GameState): boolean {
+  return state.tier2ScanActive &&
+         state.tier2PreemptiveSet &&
+         state.nextDefenseEventId !== null &&
+         state.nextDefenseEventId === state.tier2ScannedEventId
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MULTI-FRONT EVENT FORMULAS (HOST 10)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getMultiFrontExtraEventCount(): number {
+  return BALANCE.MULTI_FRONT.extraEventCount
+}
+
+export function getMultiFrontStressThresholdRatio(): number {
+  return BALANCE.MULTI_FRONT.stressThresholdRatio
+}
+
+export function isMultiFrontTriggered(state: GameState): boolean {
+  if (state.currentStage !== 10) return false
+  const threshold = getMultiFrontStressThreshold()
+  const ratio = state.hostStress.currentStress / threshold
+  return ratio >= BALANCE.MULTI_FRONT.stressThresholdRatio
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUPPLY CHAIN SPREAD FORMULAS (HOST 09 → 10)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getSupplyChainSpreadBonusCarryover(): number {
+  return BALANCE.SUPPLY_CHAIN_SPREAD.bonusCarryoverPercent / 100
+}
+
+export function getSupplyChainZoneStartBonus(): number {
+  return BALANCE.SUPPLY_CHAIN_SPREAD.zoneStartHealthBonus
+}
+
+export function getSupplyChainBPSBonus(stage: number, supplyChainBonusActive: boolean): number {
+  if (stage !== 10) return 0
+  if (!supplyChainBonusActive) return 0
+  return BALANCE.HOSTS['09'].supplyChain.bonusPercent / 100
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IMMEDIATE HIT EVENT FORMULAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function isImmediateHitEvent(eventId: DefenseEventId): boolean {
+  return BALANCE.IMMEDIATE_HIT_EVENTS.includes(eventId)
+}
+
+export function getImmediateHitDamageMultiplier(eventId: DefenseEventId): number {
+  const immediateHitMultipliers: Record<DefenseEventId, number> = {
+    'fungicide-spray': 0.65,
+    'soil-fumigation': 0.5,
+    'biocontrol-application': 0.6,
+    'resistance-breaker': 0.55,
+    'quarantine-protocol': 0.4,
+    'research-crackdown': 0.45,
+    'public-awareness-campaign': 1,
+    'regulatory-crackdown': 0.35,
+    'drought': 1,
+    'beetle-disruption': 1,
+    'cold-snap': 1,
+    'spore-competition': 1,
+    'immune-response': 1,
+    'desiccation-pulse': 1,
+    'antifungal-exudates': 1,
+    'microbial-rivalry': 1,
+    'uv-surge': 1,
+    'lignin-fortification': 1,
+    'root-allelopathy': 1,
+    'insect-vector-swarm': 1,
+    'viral-hijack': 1,
+    'nutrient-sequestration': 1,
+    'spore-predation': 1,
+    'thermal-stratification': 1,
+    'ecosystem-feedback': 1,
+    'mycorrhizal-interference': 1,
+    'allelopathic-warfare': 1,
+    'zone-reclamation': 1,
+    'spore-trap': 1,
+    'atmospheric-collapse': 1,
+    'hydrological-breakdown': 1,
+    'geochemical-disruption': 1,
+    'mass-extinction-pulse': 1,
+    'tectonic-response': 1,
+    'solar-isolation': 1,
+  }
+  return immediateHitMultipliers[eventId] ?? 1
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GRIND EVENT FORMULAS (UPDATED)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type GrindEventOutcome = 'success' | 'partialFail' | 'fullFail'
+
+export function getGrindEventTimerSeconds(): number {
+  return BALANCE.GRIND_EVENTS.timerSeconds
+}
+
+export function getGrindEventBaseFailRate(): number {
+  return BALANCE.GRIND_EVENTS.baseFailRate
+}
+
+export function getGrindEventEnzymeRewardBase(): number {
+  return BALANCE.GRIND_EVENTS.enzymeRewardBase
+}
+
+export function getGrindEventEnzymeRewardOnSuccess(): number {
+  return BALANCE.GRIND_EVENTS.enzymeRewardOnSuccess
+}
+
+export function getGrindEventEnzymeRewardOnPartialFail(): number {
+  return BALANCE.GRIND_EVENTS.enzymeRewardOnPartialFail
+}
+
+export function getGrindEventEnzymeRewardOnFullFail(): number {
+  return BALANCE.GRIND_EVENTS.enzymeRewardOnFullFail
+}
+
+export function getGrindEventSessionWindowSeconds(): number {
+  return BALANCE.GRIND_EVENTS.timerSeconds
+}
+
+export function getGrindEventFailRateIncreasePerEvent(): number {
+  return BALANCE.GRIND_EVENTS.failRateEscalation.increasePerEvent
+}
+
+export function getGrindEventMaxFailRate(): number {
+  return BALANCE.GRIND_EVENTS.failRateEscalation.maxFailRate
+}
+
+export function getGrindEventCurrentFailRate(runEventCount: number): number {
+  const baseFailRate = getGrindEventBaseFailRate()
+  const increasePerEvent = getGrindEventFailRateIncreasePerEvent()
+  const maxFailRate = getGrindEventMaxFailRate()
+  return Math.min(maxFailRate, baseFailRate + (runEventCount * increasePerEvent))
+}
+
+export function getGrindEventDiminishingReturnsMultiplier(runEventCount: number): number {
+  if (!BALANCE.GRIND_EVENTS.diminishingReturns.enabled) return 1.0
+
+  const reductionPerEvent = BALANCE.GRIND_EVENTS.diminishingReturns.reductionPerEvent
+  const minMultiplier = BALANCE.GRIND_EVENTS.diminishingReturns.minRewardMultiplier
+
+  const multiplier = 1 - (runEventCount * reductionPerEvent)
+  return Math.max(minMultiplier, multiplier)
+}
+
+export function getGrindEventEnzymeReward(runEventCount: number): number {
+  const baseReward = getGrindEventEnzymeRewardBase()
+  const diminishingMultiplier = getGrindEventDiminishingReturnsMultiplier(runEventCount)
+  return Math.floor(baseReward * diminishingMultiplier)
+}
+
+export function resolveGrindEvent(runEventCount: number): { outcome: GrindEventOutcome; enzymeReward: number } {
+  const currentFailRate = getGrindEventCurrentFailRate(runEventCount)
+  const roll = Math.random()
+
+  if (roll < currentFailRate * BALANCE.GRIND_EVENTS.failRateEscalation.maxFailRate) {
+    return { outcome: 'fullFail', enzymeReward: getGrindEventEnzymeRewardOnFullFail() }
+  } else if (roll < currentFailRate) {
+    return { outcome: 'partialFail', enzymeReward: getGrindEventEnzymeRewardOnPartialFail() }
+  } else {
+    return { outcome: 'success', enzymeReward: getGrindEventEnzymeReward(runEventCount) }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COUNTERMEASURE RESOLUTION FORMULA (UPDATED)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type CountermeasureOutcome = 'success' | 'partialFail' | 'fullFail'
+
+export function getPartialFailMitigationPercent(): number {
+  return BALANCE.DEFENSE_EVENTS.partialFailMitigationPercent
+}
+
+export function getFullFailTimerExtensionSeconds(): number {
+  return BALANCE.DEFENSE_EVENTS.fullFailTimerExtensionSeconds
+}
+
+export function getFullFailShareOfFailRate(): number {
+  return BALANCE.DEFENSE_EVENTS.fullFailShareOfFailRate
+}
+
+export function resolveCountermeasure(baseFailRate: number, stressMultiplier: number): CountermeasureOutcome {
+  const effectiveFailRate = baseFailRate * stressMultiplier
+  const roll = Math.random()
+  const fullFailThreshold = effectiveFailRate * getFullFailShareOfFailRate()
+
+  if (roll < fullFailThreshold) {
+    return 'fullFail'
+  } else if (roll < effectiveFailRate) {
+    return 'partialFail'
+  } else {
+    return 'success'
+  }
+}
+
+export function getCountermeasureMitigatedMultiplier(
+  outcome: CountermeasureOutcome,
+  baseMultiplier: number
+): number {
+  if (outcome === 'success') {
+    return 1.0
+  }
+
+  if (outcome === 'partialFail') {
+    const mitigation = getPartialFailMitigationPercent()
+    const deductionAmount = 1 - baseMultiplier
+    const reducedDeduction = deductionAmount * (1 - mitigation)
+    return 1 - reducedDeduction
+  }
+
+  return baseMultiplier
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ESCALATING DEDUCTION CURVES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type CurveType = 'linear' | 'exponential' | 'logarithmic'
+
+export function getStartDeductionPercent(): number {
+  return BALANCE.DEFENSE_EVENTS.startDeductionPercent
+}
+
+export function getDefenseRampCurve(): CurveType {
+  return BALANCE.DEFENSE_EVENTS.rampCurve as CurveType
+}
+
+export function getCurrentDeductionPercent(
+  elapsedMs: number,
+  durationMs: number,
+  startPercent: number,
+  endPercent: number,
+  curve: CurveType
+): number {
+  if (durationMs <= 0) return endPercent
+
+  const progress = Math.min(1, elapsedMs / durationMs)
+
+  if (curve === 'linear') {
+    return startPercent + (endPercent - startPercent) * progress
+  }
+
+  if (curve === 'exponential') {
+    return startPercent + (endPercent - startPercent) * Math.pow(progress, 2)
+  }
+
+  if (curve === 'logarithmic') {
+    return startPercent + (endPercent - startPercent) * (Math.log(1 + progress * 9) / Math.log(10))
+  }
+
+  return endPercent
+}
+
+export function getDefenseEventDeductionMultiplier(
+  elapsedMs: number,
+  durationMs: number,
+  baseMultiplier: number
+): number {
+  const curve = getDefenseRampCurve()
+  const startPercent = getStartDeductionPercent()
+
+  const startMultiplier = 1 - startPercent
+  const endMultiplier = baseMultiplier
+
+  const currentPercent = getCurrentDeductionPercent(elapsedMs, durationMs, startPercent, 1.0, curve)
+  const currentMultiplier = startMultiplier + (endMultiplier - startMultiplier) * (currentPercent - startPercent) / (1 - startPercent)
+
+  return Math.max(endMultiplier, Math.min(startMultiplier, currentMultiplier))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ACTIVE ATTACK ENZYME REWARD
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getEnzymeGainFromSuccessfulCountermeasure(): number {
+  return BALANCE.ACTIVE_ATTACKS.enzymeGainFromSuccessfulCountermeasure
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INTEGRATION METER ZONE CONFIG (HOST 11)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export function getIntegrationMeterMax(): number {
+  return BALANCE.HOSTS['11'].integrationMeter.maxValue
+}
+
+export function getIntegrationZoneConfig(zoneId: string): {
+  saturationThreshold: number
+  contributionPerSecond: number
+} | null {
+  const zone = BALANCE.HOSTS['11'].integrationMeter.zones.find(z => z.id === zoneId)
+  if (!zone) return null
+  return {
+    saturationThreshold: zone.saturationThreshold,
+    contributionPerSecond: zone.contributionPerSecond,
+  }
+}
+
+export function getExtinctionEventFrequencySeconds(): number {
+  return BALANCE.HOSTS['11'].integrationMeter.extinctionEvents.frequencySeconds
+}
+
+export function getExtinctionEventMeterRegressionPercent(): number {
+  return BALANCE.HOSTS['11'].integrationMeter.extinctionEvents.meterRegressionPercent
+}
+
+export function getExtinctionEventResponseWindowSeconds(): number {
+  return BALANCE.HOSTS['11'].integrationMeter.extinctionEvents.responseWindowSeconds
+}
+
+export function getIntegrationPulseConfig(): {
+  cost: number
+  durationSeconds: number
+  fillRateMultiplier: number
+  cooldownSeconds: number
+} {
+  return {
+    cost: BALANCE.HOSTS['11'].integrationMeter.integrationPulse.cost,
+    durationSeconds: BALANCE.HOSTS['11'].integrationMeter.integrationPulse.durationSeconds,
+    fillRateMultiplier: BALANCE.HOSTS['11'].integrationMeter.integrationPulse.fillRateMultiplier,
+    cooldownSeconds: BALANCE.HOSTS['11'].integrationMeter.integrationPulse.cooldownSeconds,
+  }
+}
+
+export function getIntegrationPulseCost(): number {
+  return BALANCE.HOSTS['11'].integrationMeter.integrationPulse.cost
+}
+
+export function getIntegrationPulseDurationSeconds(): number {
+  return BALANCE.HOSTS['11'].integrationMeter.integrationPulse.durationSeconds
+}
+
+export function getIntegrationPulseBPSMultiplier(): number {
+  return BALANCE.HOSTS['11'].integrationMeter.integrationPulse.fillRateMultiplier
+}
+
+export function getExtinctionEventFrequency(): number {
+  return BALANCE.HOSTS['11'].integrationMeter.extinctionEvents.frequencySeconds
+}
+
+export function getExtinctionEventMeterRegression(): number {
+  return BALANCE.HOSTS['11'].integrationMeter.extinctionEvents.meterRegressionPercent
+}
+
+export function getIntegrationMeterSaturationThreshold(): number {
+  const zones = BALANCE.HOSTS['11'].integrationMeter.zones
+  return zones.length > 0 ? zones[0].saturationThreshold : 200
+}
+
+export function getZoneSaturationRate(zoneCompromisePercent: number): number {
+  if (zoneCompromisePercent < 50) return 0
+  const effectivePercent = (zoneCompromisePercent - 50) / 50
+  return effectivePercent * 0.1
+}
+
+export function getIntegrationMeterFillRate(state: GameState): number {
+  if (state.currentStage !== 11) return 0
+  let fillRate = 0
+  for (const zone of state.integrationZones) {
+    if (zone.isLocked) continue
+    const zoneConfig = getIntegrationZoneConfig(zone.zoneId)
+    if (!zoneConfig) continue
+    if (zone.saturationPercent >= zoneConfig.saturationThreshold) {
+      fillRate += zoneConfig.contributionPerSecond
+    } else {
+      const zoneState = state.zones.find(z => z.id === zone.zoneId)
+      if (zoneState) {
+        fillRate += getZoneSaturationRate(zoneState.compromisePercent)
+      }
+    }
+  }
+  return fillRate
+}
+
+export function isIntegrationComplete(state: GameState): boolean {
+  return state.currentStage === 11 && state.integrationMeter >= getIntegrationMeterMax()
+}
+
+export function canUseIntegrationPulse(state: GameState): boolean {
+  if (state.currentStage !== 11) return false
+  if (state.signal < getIntegrationPulseCost()) return false
+  if (state.integrationPulse?.isActive) return false
+  return true
+}
+
+export function getIntegrationMeterRegressionMultiplier(state: GameState): number {
+  return 1 - (getExtinctionEventMeterRegression() / 100)
 }

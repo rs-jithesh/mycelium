@@ -43,49 +43,97 @@ Core resource and progression fields:
 
 ```ts
 export interface GameState {
+  // Core resources
   biomass: Decimal
   biomassPerClick: Decimal
   biomassPerSecond: Decimal
   lifetimeBiomass: Decimal
+  
+  // Prestige/meta
   geneticMemory: Decimal
+  geneticMemoryStats: GeneticMemoryStats
+  prestigeCount: number
+  hasPrestiged: boolean
+  hostEchoes: Record<number, HostEchoType>
+  
+  // Signal economy (Run 2+)
   signal: number
   signalPerSecond: number
   signalCap: number
   signalDecaying: boolean
   signalOverspent: boolean
-  prestigeCount: number
-  hasPrestiged: boolean
+  
+  // Host progression
   currentStage: number
   highestStageReached: number
+  currentHostId: HostId
   hostName: string
   stageLabel: string
   subtitle: string
   hostHealth: Decimal
   hostMaxHealth: Decimal
   hostCompleted: boolean
+  hostCorruptionPercent: number
+  zones: ZoneState[]
+  integrationMeter: number
+  
+  // Evolution/build
   strain: StrainId | null
   mutationPoints: number
   unlockedStrains: Record<StrainId, boolean>
   stats: Record<StatId, number>
   unlockedSkills: SkillId[]
   clickCount: number
+  
+  // Generators and upgrades
   generators: Record<GeneratorId, { owned: number }>
   upgrades: Record<UpgradeId, boolean>
   buyAmount: BuyAmount
+  
+  // Defense system
   activeDefenseEvents: ActiveDefenseEvent[]
   nextDefenseEventId: DefenseEventId | null
   equippedCountermeasure: CountermeasureId | null
+  nextDefenseCheckAt: number
+  proactiveCountermeasure: ProactiveCountermeasureId | null
+  
+  // Strain-specific state
   activeParasiteDefenseBurstMs: number
   activeCoordinationLinks: ActiveCoordinationLink[]
   activeVulnerabilityWindow: ActiveVulnerabilityWindow | null
   rivalSuppressed: boolean
   rivalSuppressionRemainingMs: number
+  nextMycorrhizalPulseAt: number | null
+  
+  // Active attacks
+  enzymeReserves: number
+  activeAttack: ActiveAttackState | null
+  hostStress: HostStressState
+  
+  // Other systems
+  seasonalState: SeasonalState | null
+  rivalNetworkState: RivalNetworkState | null
+  integrationZones: IntegrationZoneState[]
+  vectorProgress: number
+  activeGrindSession: { eventCount: number; windowStartTime: number } | null
+  runGrindEventCount: number
+  
+  // Internal/logging
   _signalDecayLogged: boolean
   _signalOverspentLogged: boolean
   _wasOverspent: boolean
-  nextDefenseCheckAt: number
+  _currentHostClickDamage: Decimal
+  _currentHostPassiveDamage: Decimal
+  _currentHostDefenseEventsSurvived: number
+  _offlineEvents: OfflineEvent[]
+  _pendingOfflineEvents: OfflineEvent[]
+  manifestationQueue: string[]
+  
+  // Timestamps
   lastSaveTime: number
   lastTickTime: number
+  
+  // UI/log
   log: string[]
   visibility: VisibilityState
 }
@@ -192,29 +240,53 @@ Examples:
 - `chitin-shell`
 - `distributed-cognition`
 
+### Countermeasures
+
+Six countermeasures provide tiered coverage against 30+ defense events:
+
+- `moisture-buffer` — Thermal and desiccation defense
+- `chitin-lattice` — Physical disruption protection
+- `enzyme-suppressor` — Chemical neutralization
+- `thermal-regulator` — Temperature and UV defense
+- `signal-jammer` — Immune detection masking
+- `spore-shield` — Reproductive tissue protection
+
+Each countermeasure has:
+- **Full coverage** (70% mitigation) for 2-3 primary event types
+- **Partial coverage** (30% mitigation) for 2 secondary event types
+- `flavorLine` for UI display
+- `uiAccentColor` for theming
+
+Only one countermeasure may be equipped per run and the choice is permanent for that run.
+
 ### Hosts
 
-Hosts form the stage ladder:
+Hosts form the 11-stage campaign ladder:
 
-1. Dead Leaf
-2. Rotting Log
-3. Forest Floor
-4. Ancient Oak
-5. Forest System
-6. Watershed
-7. Continental Soil
-8. The Biosphere
+1. The Fallen Leaf — Single zone, no defense events, introduction
+2. The Woodlouse — Basic defense events, countermeasures introduced
+3. The Ant Colony — Two zones (Outer Colony, Queen Node), clustered defenses
+4. The Rotting Elm — Two zones, rare high-impact events, active attacks unlock
+5. The Corvid — Three zones, stress cascade, time-sensitive events
+6. The Boar — Three zones, vector mechanic, countermeasure charges
+7. The River Network — Three zones, environmental events, seasonal cycles
+8. The Old-Growth Forest — Four zones, rival network defense
+9. The Agricultural System — Four zones, chemical defense, supply chain spread
+10. The Urban Microbiome — Five zones, human countermeasures, tier-2 events
+11. The Biosphere — Six zones, integration meter win condition, extinction-class events
 
 Each host contains:
 
-- name
-- stage label
-- subtitle
-- health
-- flavor
-- threat level
-- defense signature
+- name and hostId
+- stage label and subtitle
+- health (total and per-zone)
+- flavor text and quote
+- threat level (low/medium/high/extreme)
+- defense signature and defense event profile
 - transition signal
+- zone definitions with unlock thresholds
+- win condition (healthToZero or integrationMeter)
+- host-specific mechanics (queen nodes, seasonal cycles, etc.)
 
 ## 5. Balance Model
 
@@ -288,13 +360,29 @@ DEFENSE_FORECAST_WARNING_MS: 30_000,
 
 `DEFENSE_FORECAST_WARNING_MS` is the window before the next defense check when the UI begins showing the incoming threat name and a countdown. The event is not guaranteed to fire (the random roll can fail), so UI language uses hedged phrasing.
 
-Countermeasure constants:
+Countermeasure tier system (6 countermeasures with full/partial coverage):
 
 ```ts
-COUNTERMEASURE_MOISTURE_BUFFER_MITIGATION: 0.15,
-COUNTERMEASURE_IMMUNE_MIMICRY_MITIGATION: 0.18,
-COUNTERMEASURE_BROOD_DECOY_FALLBACK_MULTIPLIER: 0.78,
+// Full coverage mitigation (primary events)
+COUNTERMEASURE_FULL_MITIGATION: 0.70,
+
+// Partial coverage mitigation (secondary events)
+COUNTERMEASURE_PARTIAL_MITIGATION: 0.30,
+
+// Resilience bonus per point (additive)
+COUNTERMEASURE_RESILIENCE_BONUS_PER_POINT: 0.05,
+
+// Hard cap — mitigation never exceeds this
+COUNTERMEASURE_TIER_MITIGATION_CAP: 0.90,
 ```
+
+The six countermeasures provide coverage across 30+ defense events:
+- **Moisture Buffer** — Full: Drought, Desiccation Pulse / Partial: Cold Snap, Antifungal Exudates
+- **Chitin Lattice** — Full: Beetle Disruption, Insect Vector Swarm / Partial: Lignin Fortification, Spore Predation
+- **Enzyme Suppressor** — Full: Antifungal Exudates, Microbial Rivalry / Partial: Viral Hijack, Root Allelopathy
+- **Thermal Regulator** — Full: Cold Snap, Thermal Stratification, UV Surge / Partial: Desiccation Pulse, Ecosystem Feedback
+- **Signal Jammer** — Full: Immune Response, Spore Competition / Partial: Viral Hijack, Microbial Rivalry
+- **Spore Shield** — Full: Spore Predation, Lignin Fortification / Partial: Insect Vector Swarm, Nutrient Sequestration
 
 ### Upgrade constants
 
@@ -314,20 +402,25 @@ SPOROCARP_STAGE3_CARRY_BONUS: 0.35,
 
 ### Host health pacing
 
+Current host health values:
+
 ```ts
 HOST_HEALTH: [
-  1_000,           // Stage 1: ~13m
-  26_300_000,      // Stage 2: ~1.5h
-  3_800_000_000,   // Stage 3: ~3.5h
-  122_000_000_000, // Stage 4: ~8.5h
-  1.7e15,          // Stage 5: ~14h
-  6e16,            // Stage 6: ~4d
-  3.6e22,          // Stage 7: ~7d
-  6e26,            // Stage 8: ~1d final push
+  600,              // Stage 1: The Fallen Leaf
+  14_000,           // Stage 2: The Woodlouse
+  90_000,           // Stage 3: The Ant Colony
+  320_000,          // Stage 4: The Rotting Elm
+  1_000_000,        // Stage 5: The Corvid
+  5_000_000,        // Stage 6: The Boar
+  25_000_000,       // Stage 7: The River Network
+  100_000_000,      // Stage 8: The Old-Growth Forest
+  500_000_000,      // Stage 9: The Agricultural System
+  2_000_000_000,    // Stage 10: The Urban Microbiome
+  10_000_000_000,   // Stage 11: The Biosphere
 ],
 ```
 
-These values produce a verified 12.2-day total first run for a medium-active player (see Section 17).
+Note: These are the base health values before zone distribution and mechanic multipliers. Actual pacing is determined by simulation verification.
 
 ## 6. Progression Model
 
@@ -515,13 +608,22 @@ The likely event pool changes by stage:
 
 ### Countermeasures
 
-Three one-per-run countermeasures exist:
+Six one-per-run countermeasures exist with tiered coverage:
 
-- Moisture Buffer
-- Brood Decoy
-- Immune Mimicry
+- **Moisture Buffer** — Full: Drought, Desiccation Pulse / Partial: Cold Snap, Antifungal Exudates
+- **Chitin Lattice** — Full: Beetle Disruption, Insect Vector Swarm / Partial: Lignin Fortification, Spore Predation
+- **Enzyme Suppressor** — Full: Antifungal Exudates, Microbial Rivalry, Nutrient Sequestration / Partial: Viral Hijack, Root Allelopathy
+- **Thermal Regulator** — Full: Cold Snap, Thermal Stratification, UV Surge / Partial: Desiccation Pulse, Ecosystem Feedback
+- **Signal Jammer** — Full: Immune Response, Spore Competition, Ecosystem Feedback / Partial: Viral Hijack, Microbial Rivalry
+- **Spore Shield** — Full: Spore Predation, Lignin Fortification, Root Allelopathy / Partial: Insect Vector Swarm, Nutrient Sequestration
 
-The player may only equip one, and only once per run.
+**Coverage mechanics:**
+- Full coverage: 70% penalty mitigation
+- Partial coverage: 30% penalty mitigation
+- Resilience bonus: +5% per point (additive)
+- Hard cap: 90% maximum mitigation (some penalty always applies)
+
+The player may only equip one countermeasure per run, and the choice is permanent until prestige.
 
 ### Strain interactions with defense
 
@@ -836,28 +938,35 @@ Even though Signal on run 1 is fully disabled, the Tier 4 description still refe
 
 ## 15. Signal Economy Status
 
-Signal is a prestige-layer feature. It is fully absent from run 1 and becomes active starting run 2.
+Signal is a prestige-layer feature implemented in the engine. It is fully absent from run 1 and becomes active starting run 2.
 
-### What is active
+### Current Implementation Status
 
-- `tickSignalSystem` is called every tick and is the live runtime entry point
-- Signal panel mounts in the UI, gated on `prestigeCount > 0 && isSignalUnlocked`
+Signal economy is **implemented and functional** in the engine with the following state:
+
+- **Active in engine**: `tickSignalSystem`, production/decay/overspend logic, Signal cap calculations
+- **UI partially exposed**: Signal panel renders conditionally based on prestige and unlock state
+- **Experimental**: Full UI integration for spend actions is work-in-progress
+
+### What is active (Run 2+)
+
+- `tickSignalSystem` is called every tick with guards for `prestigeCount > 0` and `isSignalUnlocked(state)`
+- Signal panel mounts when `prestigeCount > 0 && isSignalUnlocked(state)` is true
 - Signal production/decay/overspend tick logic runs on run 2+
 - Signal provides a production bonus to all generators (`+signal / SIGNAL_PRODUCTION_DIVISOR`)
 - `recalculateDerivedState` computes Signal values conditionally on `prestigeCount > 0`
+- Strain modifiers apply: Symbiote produces more, Parasite has lower cap, Saprophyte decays slower
 
-### What is gated to prestige run 2+
+### Signal Spend Actions (Implemented in Engine)
 
-- `tickSignalSystem` has an early return guard: `if (state.prestigeCount === 0 || !isSignalUnlocked(state)) return state`
-- Signal panel visibility is blocked: `signalPanel` stays `false` on run 1
-- Signal production multiplier in `getProductionMultiplier` is also guarded by `prestigeCount > 0`
+The following actions exist in the engine and are exposed through the store:
 
-### What remains scaffolded but not yet player-facing
+- **Coordination Command**: Costs 2 Signal, boosts target tier production for 30 seconds
+- **Vulnerability Window**: Costs 4 Signal, increases host damage taken for 30 seconds  
+- **Rival Suppression**: Costs 5 Signal, pauses rival network activities
+- **Network Isolation**: Costs 3 Signal, defensive action against rival networks
 
-- Signal spend actions (Coordination Command, Vulnerability Window, Rival Suppression, Network Isolation) exist in the engine but are not fully surfaced in the UI
-- Signal simulation milestones are commented out in `simulation.ts`
-
-Representative tick guard:
+### Run 1 Exclusion
 
 ```ts
 export function tickSignalSystem(state: GameState, deltaMs: number): GameState {
@@ -868,7 +977,7 @@ export function tickSignalSystem(state: GameState, deltaMs: number): GameState {
 }
 ```
 
-Representative production guard:
+### Production Multiplier Application
 
 ```ts
 if (state.prestigeCount > 0 && isSignalUnlocked(state) && state.signal > 0) {
@@ -876,6 +985,15 @@ if (state.prestigeCount > 0 && isSignalUnlocked(state) && state.signal > 0) {
   multiplier = multiplier.mul(signalBonus)
 }
 ```
+
+### Signal Configuration
+
+Located in `balance.config.ts` under `BALANCE.SIGNAL`:
+
+- Base production: 0.15/sec at Stage 3 unlock
+- Decay rate: 0.08/sec when above 70% cap
+- Penalty threshold: Below 10% applies 0.85x BPS multiplier
+- Base cap: 8 (modified by strain and Host Echoes)
 
 ## 16. Simulation Runner
 
@@ -1037,14 +1155,18 @@ onMount(() => {
 
 The game currently consists of:
 
-- a host-based incremental progression model
-- generator tiers with a recent structural early-game pacing rework
-- three strains
-- mutation stats and branch-based skills
-- stage-based host progression
-- a defense and countermeasure subsystem
-- prestige via Spore Release and Genetic Memory
-- a headless simulation runner for tuning
-- a Signal economy active from prestige run 2 onward, with spend actions scaffolded for future player-facing exposure
+- **Host-based progression** — 11 stages with escalating complexity (micro → organism → planetary)
+- **Zone system** — Multi-zone hosts (Stage 3+) with sequential unlock thresholds
+- **8 generator tiers** — With cost scaling and unlock progression
+- **9 upgrades** — Covering early, mid, and late-game
+- **Three strains** — Parasite (click), Symbiote (passive), Saprophyte (hybrid, prestige-locked)
+- **Stat system** — Virulence, Resilience, Complexity with soft caps and strain synergy
+- **9 skills** — Branch-based, stat-gated, biomass-purchased
+- **Defense subsystem** — 17+ event types, countermeasures, grindable events, tier-2 events
+- **Host Echoes** — Permanent bonuses based on playstyle per host
+- **Active attacks** — Enzyme-based zone targeting (Stage 4+)
+- **Prestige** — Spore Release with Genetic Memory and permanent meta-progression
+- **Signal economy** — Prestige-layer resource (Run 2+) with production bonuses and spend actions
+- **Headless simulation** — For balance verification and tuning
 
 This document should be treated as the primary high-level implementation reference for the current state of the project.

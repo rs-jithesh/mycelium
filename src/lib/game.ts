@@ -48,7 +48,32 @@ export type DefenseEventId =
   | 'spore-predation'
   | 'thermal-stratification'
   | 'ecosystem-feedback'
-export type CountermeasureId = 'moisture-buffer' | 'brood-decoy' | 'immune-mimicry'
+  | 'mycorrhizal-interference'
+  | 'allelopathic-warfare'
+  | 'zone-reclamation'
+  | 'spore-trap'
+  | 'fungicide-spray'
+  | 'soil-fumigation'
+  | 'biocontrol-application'
+  | 'resistance-breaker'
+  | 'quarantine-protocol'
+  | 'research-crackdown'
+  | 'public-awareness-campaign'
+  | 'regulatory-crackdown'
+  | 'atmospheric-collapse'
+  | 'hydrological-breakdown'
+  | 'geochemical-disruption'
+  | 'mass-extinction-pulse'
+  | 'tectonic-response'
+  | 'solar-isolation'
+export type CountermeasureId =
+  | 'moisture-buffer'
+  | 'chitin-lattice'
+  | 'enzyme-suppressor'
+  | 'thermal-regulator'
+  | 'signal-jammer'
+  | 'spore-shield'
+export type ProactiveCountermeasureId = 'preemptive-enzyme' | 'preemptive-biofilm' | 'preemptive-signal' | 'preemptive-quorum'
 export type HostEchoType = 'aggressive' | 'efficient' | 'resilient' | 'patient'
 
 export interface HostEchoDefinition {
@@ -99,16 +124,46 @@ export interface SkillDefinition {
   description: string
 }
 
+export type HostId = '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09' | '10' | '11'
+
+export type DefenseEventProfile =
+  | 'none'
+  | 'basic'
+  | 'clustered'
+  | 'rare_high_impact'
+  | 'time_sensitive'
+  | 'countermeasure_charges'
+  | 'environmental'
+  | 'rival_network'
+  | 'chemical'
+  | 'human_countermeasures'
+  | 'extinction_class'
+
+export type WinCondition = 'healthToZero' | 'integrationMeter'
+
+export interface ZoneDefinition {
+  id: string
+  name: string
+  healthPercent: number
+  unlockThreshold?: number
+}
+
 export interface HostDefinition {
   stage: number
+  hostId: HostId
   name: string
   stageLabel: string
   subtitle: string
+  flavorQuote: string
   health: Decimal
   flavor: string
   threatLevel: 'low' | 'medium' | 'high' | 'extreme'
   defenseSignature: string
   transitionSignal: string
+  zones: ZoneDefinition[]
+  defenseEventProfile: DefenseEventProfile
+  activeAttackAvailable: boolean
+  winCondition: WinCondition
 }
 
 export interface ActiveDefenseEvent {
@@ -119,6 +174,58 @@ export interface ActiveDefenseEvent {
   multiplier: Decimal
   clickMultiplier?: Decimal
   disabledGeneratorId?: GeneratorId
+  tier?: 1 | 2
+  isGrindable?: boolean
+  chargeCost?: number
+}
+
+export interface ZoneState {
+  id: string
+  name: string
+  health: Decimal
+  maxHealth: Decimal
+  isUnlocked: boolean
+  compromisePercent: number
+  isRivalControlled?: boolean
+  rivalControlEndAt?: number
+}
+
+export interface HostStressState {
+  currentStress: number
+  lastAttackTime: number
+}
+
+export interface SeasonalState {
+  currentSeason: 'spring' | 'summer' | 'autumn' | 'winter'
+  seasonStartTime: number
+  seasonIndex: number
+}
+
+export interface RivalNetworkState {
+  isSuppressing: boolean
+  suppressionEndAt: number
+  activeNodes: string[]
+}
+
+export interface IntegrationZoneState {
+  zoneId: string
+  saturationPercent: number
+  isLocked: boolean
+  contributionRate: number
+}
+
+export interface ActiveAttackState {
+  isActive: boolean
+  zoneId: string | null
+  endsAt: number
+  bpsBonusMultiplier: number
+  cooldownEndAt: number
+}
+
+export interface IntegrationPulseState {
+  isActive: boolean
+  endsAt: number
+  bpsBonusMultiplier: number
 }
 
 export interface OfflineEvent {
@@ -139,7 +246,10 @@ export interface CountermeasureDefinition {
   id: CountermeasureId
   name: string
   description: string
+  flavorLine: string
   targetEventIds: DefenseEventId[]
+  partialEventIds: DefenseEventId[]
+  uiAccentColor: string
 }
 
 export interface ActiveCoordinationLink {
@@ -236,10 +346,30 @@ export interface GameState {
   _pendingOfflineEvents: OfflineEvent[]
   hostCorruptionPercent: number
   manifestationQueue: string[]
-  /** Genetic memory for mutation stats - persists across prestiges */
   geneticMemoryStats: GeneticMemoryStats
-  /** Timestamp for next Mycorrhizal Network pulse (Symbiote signature ability) */
   nextMycorrhizalPulseAt: number | null
+  zones: ZoneState[]
+  currentHostId: HostId
+  enzymeReserves: number
+  hostStress: HostStressState
+  seasonalState: SeasonalState | null
+  rivalNetworkState: RivalNetworkState | null
+  integrationZones: IntegrationZoneState[]
+  integrationMeter: number
+  activeAttack: ActiveAttackState | null
+  integrationPulse: IntegrationPulseState | null
+  vectorProgress: number
+  activeGrindSession: {
+    eventCount: number
+    windowStartTime: number
+  } | null
+  runGrindEventCount: number
+  proactiveCountermeasure: ProactiveCountermeasureId | null
+  proactiveCountermeasureEndAt: number
+  tier2ScanActive: boolean
+  tier2ScannedEventId: DefenseEventId | null
+  tier2PreemptiveSet: boolean
+  supplyChainBonusActive: boolean
 }
 
 // ============================================================================
@@ -392,20 +522,56 @@ export const countermeasureDefinitions: CountermeasureDefinition[] = [
   {
     id: 'moisture-buffer',
     name: 'Moisture Buffer',
-    description: 'Reduces Drought severity and stabilises dry-host collapse windows.',
-    targetEventIds: ['drought'],
+    description: 'Full: Drought, Desiccation Pulse. Partial: Cold Snap, Antifungal Exudates.',
+    flavorLine: 'Hydric reserves pressurized. Network humidity stabilized.',
+    targetEventIds: ['drought', 'desiccation-pulse'],
+    partialEventIds: ['cold-snap', 'antifungal-exudates'],
+    uiAccentColor: '#1a4a6a',
   },
   {
-    id: 'brood-decoy',
-    name: 'Brood Decoy',
-    description: 'Converts Beetle Disruption into a softer colony-wide penalty instead of a full sever.',
-    targetEventIds: ['beetle-disruption'],
+    id: 'chitin-lattice',
+    name: 'Chitin Lattice',
+    description: 'Full: Beetle Disruption, Insect Vector Swarm. Partial: Lignin Fortification, Spore Predation.',
+    flavorLine: 'Structural polymers reinforcing critical network junctions.',
+    targetEventIds: ['beetle-disruption', 'insect-vector-swarm'],
+    partialEventIds: ['lignin-fortification', 'spore-predation'],
+    uiAccentColor: '#3a2a0a',
   },
   {
-    id: 'immune-mimicry',
-    name: 'Immune Mimicry',
-    description: 'Reduces Immune Response suppression by masking parts of the colony signature.',
-    targetEventIds: ['immune-response'],
+    id: 'enzyme-suppressor',
+    name: 'Enzyme Suppressor',
+    description: 'Full: Antifungal Exudates, Microbial Rivalry, Nutrient Sequestration. Partial: Viral Hijack, Root Allelopathy.',
+    flavorLine: 'Secondary metabolite inhibitors deployed. Chemical hostility suppressed.',
+    targetEventIds: ['antifungal-exudates', 'microbial-rivalry', 'nutrient-sequestration'],
+    partialEventIds: ['viral-hijack', 'root-allelopathy'],
+    uiAccentColor: '#1a3a1a',
+  },
+  {
+    id: 'thermal-regulator',
+    name: 'Thermal Regulator',
+    description: 'Full: Cold Snap, Thermal Stratification, UV Surge. Partial: Desiccation Pulse, Ecosystem Feedback.',
+    flavorLine: 'Metabolic heat distribution active. Thermal gradient neutralized.',
+    targetEventIds: ['cold-snap', 'thermal-stratification', 'uv-surge'],
+    partialEventIds: ['desiccation-pulse', 'ecosystem-feedback'],
+    uiAccentColor: '#3a1a0a',
+  },
+  {
+    id: 'signal-jammer',
+    name: 'Signal Jammer',
+    description: 'Full: Immune Response, Spore Competition, Ecosystem Feedback. Partial: Viral Hijack, Microbial Rivalry.',
+    flavorLine: 'Colony signature masked. Host targeting resolution degraded.',
+    targetEventIds: ['immune-response', 'spore-competition', 'ecosystem-feedback'],
+    partialEventIds: ['viral-hijack', 'microbial-rivalry'],
+    uiAccentColor: '#2a1a3a',
+  },
+  {
+    id: 'spore-shield',
+    name: 'Spore Shield',
+    description: 'Full: Spore Predation, Lignin Fortification, Root Allelopathy. Partial: Insect Vector Swarm, Nutrient Sequestration.',
+    flavorLine: 'Reproductive tissue encased. Feeding margins reinforced.',
+    targetEventIds: ['spore-predation', 'lignin-fortification', 'root-allelopathy'],
+    partialEventIds: ['insect-vector-swarm', 'nutrient-sequestration'],
+    uiAccentColor: '#1a3a2a',
   },
 ]
 
@@ -523,91 +689,235 @@ export const skillDefinitions: SkillDefinition[] = [
 export const hostDefinitions: HostDefinition[] = [
   {
     stage: 1,
-    name: 'Dead Leaf',
-    stageLabel: 'Germination',
-    subtitle: "The Leaf Doesn't Notice",
+    hostId: '01',
+    name: 'The Fallen Leaf',
+    stageLabel: 'Decomposer',
+    subtitle: 'It begins here. It always begins here.',
+    flavorQuote: 'It begins here. It always begins here.',
     health: new Decimal(BALANCE.HOST_HEALTH[0]),
-    flavor: 'A dry autumn remnant. Fragile. The first meal.',
+    flavor: 'A dry oak leaf on a forest floor. Decomposition is not violence. It is return.',
     threatLevel: 'low',
-    defenseSignature: 'Brittle tissue. Minimal resistance.',
+    defenseSignature: 'None. Host has no immune response.',
     transitionSignal: 'Capillary spread is enough. No complex response detected.',
+    zones: [
+      { id: 'leaf_surface', name: 'Leaf Surface', healthPercent: 100 },
+    ],
+    defenseEventProfile: 'none',
+    activeAttackAvailable: false,
+    winCondition: 'healthToZero',
   },
   {
     stage: 2,
-    name: 'Rotting Log',
-    stageLabel: 'Colonisation',
-    subtitle: 'The Log Softens',
+    hostId: '02',
+    name: 'The Woodlouse',
+    stageLabel: 'Decomposer',
+    subtitle: 'The first living thing. It does not understand what has found it.',
+    flavorQuote: 'The first living thing. It does not understand what has found it.',
     health: new Decimal(BALANCE.HOST_HEALTH[1]),
-    flavor: 'Bark splits. Beetles scatter. Ours now.',
-    threatLevel: 'medium',
-    defenseSignature: 'Insect disruption and moisture instability.',
-    transitionSignal: 'Mass must be redirected into denser channels before bark collapse.',
+    flavor: 'Armadillidium vulgare. The pill woodlouse has lived alongside fungi its entire life. It is not afraid. It should be.',
+    threatLevel: 'low',
+    defenseSignature: 'Slow, weak immune response.',
+    transitionSignal: 'The first lesson: persistence outlasts defense.',
+    zones: [
+      { id: 'carapace', name: 'Carapace', healthPercent: 100 },
+    ],
+    defenseEventProfile: 'basic',
+    activeAttackAvailable: false,
+    winCondition: 'healthToZero',
   },
   {
     stage: 3,
-    name: 'Forest Floor',
-    stageLabel: 'Saturation',
-    subtitle: 'The Soil Forgets Itself',
+    hostId: '03',
+    name: 'The Ant Colony',
+    stageLabel: 'Parasite',
+    subtitle: 'One mind in ten thousand bodies. The mycelium recognises something familiar.',
+    flavorQuote: 'One mind in ten thousand bodies. The mycelium recognises something familiar.',
     health: new Decimal(BALANCE.HOST_HEALTH[2]),
-    flavor: 'Entire square meters of soil rewritten.',
+    flavor: 'Ophiocordyceps-adjacent ant colony. Distributed intelligence, collective defense, emergent behaviour from simple rules. The mycelium has been doing this since before ants existed.',
     threatLevel: 'medium',
-    defenseSignature: 'Temperature fluctuation and broad competing colonies.',
-    transitionSignal: 'Surface spread is no longer enough. Networked digestion required.',
+    defenseSignature: 'Coordinated defense, Queen Node boss mechanic.',
+    transitionSignal: 'Compromising the Queen Node is not conquest. It is a conversation that only one party survives.',
+    zones: [
+      { id: 'outer_colony', name: 'Outer Colony', healthPercent: 60 },
+      { id: 'queen_node', name: 'Queen Node', healthPercent: 40, unlockThreshold: 0.6 },
+    ],
+    defenseEventProfile: 'clustered',
+    activeAttackAvailable: false,
+    winCondition: 'healthToZero',
   },
   {
     stage: 4,
-    name: 'Ancient Oak',
-    stageLabel: 'Penetration',
-    subtitle: 'The Oak Remembers Resistance',
+    hostId: '04',
+    name: 'The Rotting Elm',
+    stageLabel: 'Parasite',
+    subtitle: 'The tree has been dying for thirty years. The mycelium simply agrees.',
+    flavorQuote: 'The tree has been dying for thirty years. The mycelium simply agrees.',
     health: new Decimal(BALANCE.HOST_HEALTH[3]),
-    flavor: 'The tree resists. It has fought fungi before.',
+    flavor: 'Ulmus procera. Ancient, vast, already in decline. The elm is not a victim. It is a transition.',
     threatLevel: 'high',
-    defenseSignature: 'Internal transport barriers and host memory responses.',
-    transitionSignal: 'Woody resistance detected. Assimilation must tunnel through living structure.',
+    defenseSignature: 'Rare but high-impact defense events.',
+    transitionSignal: 'Active attacks are born not from aggression but from understanding.',
+    zones: [
+      { id: 'bark_layer', name: 'Bark Layer', healthPercent: 50 },
+      { id: 'heartwood', name: 'Heartwood', healthPercent: 50, unlockThreshold: 0.5 },
+    ],
+    defenseEventProfile: 'rare_high_impact',
+    activeAttackAvailable: true,
+    winCondition: 'healthToZero',
   },
   {
     stage: 5,
-    name: 'Forest System',
-    stageLabel: 'Convergence',
-    subtitle: 'The Forest Stops Communicating',
+    hostId: '05',
+    name: 'The Corvid',
+    stageLabel: 'Pathogen',
+    subtitle: 'Warm. Fast. Afraid. The mycelium has not encountered fear before.',
+    flavorQuote: 'Warm. Fast. Afraid. The mycelium has not encountered fear before.',
     health: new Decimal(BALANCE.HOST_HEALTH[4]),
-    flavor: 'The mycorrhizal network of a thousand trees. Absorb it.',
+    flavor: 'Corvus corone. The crow knows something is wrong. Its behaviour changes. The mycelium learns that consciousness is just another defense mechanism.',
     threatLevel: 'high',
-    defenseSignature: 'Distributed immune signaling across multiple organisms.',
-    transitionSignal: 'Single-host logic fails here. The colony must act as a system.',
+    defenseSignature: 'Fast immune response, time-sensitive events, stress cascade.',
+    transitionSignal: "The crow's intelligence becomes the very thing that spreads the network faster.",
+    zones: [
+      { id: 'peripheral_tissue', name: 'Peripheral Tissue', healthPercent: 40 },
+      { id: 'circulatory', name: 'Circulatory', healthPercent: 30, unlockThreshold: 0.4 },
+      { id: 'neural', name: 'Neural', healthPercent: 30, unlockThreshold: 0.7 },
+    ],
+    defenseEventProfile: 'time_sensitive',
+    activeAttackAvailable: true,
+    winCondition: 'healthToZero',
   },
   {
     stage: 6,
-    name: 'Watershed',
-    stageLabel: 'Diffusion',
-    subtitle: 'The Water Carries Us Now',
+    hostId: '06',
+    name: 'The Boar',
+    stageLabel: 'Pathogen',
+    subtitle: 'It carries the mycelium through the forest like a gift it does not know it is giving.',
+    flavorQuote: 'It carries the mycelium through the forest like a gift it does not know it is giving.',
     health: new Decimal(BALANCE.HOST_HEALTH[5]),
-    flavor: 'Water carries the signal now.',
+    flavor: 'Sus scrofa. The boar roots through the same soil the mycelium has already threaded. For the first time, the mycelium spreads beyond its host while still inside it.',
     threatLevel: 'high',
-    defenseSignature: 'Hydraulic flushing and long-range contamination pressure.',
-    transitionSignal: 'Fluid dynamics rewrite the battlefield. Persistence outruns precision.',
+    defenseSignature: 'Countermeasure charges system, host-as-vector.',
+    transitionSignal: 'Hosts are not just resources. They are infrastructure.',
+    zones: [
+      { id: 'gut', name: 'Gut', healthPercent: 35 },
+      { id: 'circulatory', name: 'Circulatory', healthPercent: 35 },
+      { id: 'neural', name: 'Neural', healthPercent: 30 },
+    ],
+    defenseEventProfile: 'countermeasure_charges',
+    activeAttackAvailable: true,
+    winCondition: 'healthToZero',
   },
   {
     stage: 7,
-    name: 'Continental Soil',
-    stageLabel: 'Dominance',
-    subtitle: 'The Ground Is Ours',
+    hostId: '07',
+    name: 'The River Network',
+    stageLabel: 'Ecological Force',
+    subtitle: 'No heartbeat. No immune system. Just flow. The mycelium learns to move like water.',
+    flavorQuote: 'No heartbeat. No immune system. Just flow. The mycelium learns to move like water.',
     health: new Decimal(BALANCE.HOST_HEALTH[6]),
-    flavor: 'Continents are just substrate.',
-    threatLevel: 'extreme',
-    defenseSignature: 'Planet-scale competitors and ecosystem-wide suppression.',
-    transitionSignal: 'Local dominance is irrelevant. The colony must think in biomes.',
+    flavor: 'A watershed. A drainage basin. The first host without a body. Defense here is ecological.',
+    threatLevel: 'high',
+    defenseSignature: 'Environmental events, seasonal cycle.',
+    transitionSignal: 'Some systems can only be compromised from within, slowly, over years.',
+    zones: [
+      { id: 'tributary_network', name: 'Tributary Network', healthPercent: 33 },
+      { id: 'main_channel', name: 'Main Channel', healthPercent: 34 },
+      { id: 'aquifer', name: 'Aquifer', healthPercent: 33 },
+    ],
+    defenseEventProfile: 'environmental',
+    activeAttackAvailable: true,
+    winCondition: 'healthToZero',
   },
   {
     stage: 8,
-    name: 'The Biosphere',
-    stageLabel: 'Terminus',
-    subtitle: 'There Is No Host Remaining',
+    hostId: '08',
+    name: 'The Old-Growth Forest',
+    stageLabel: 'Ecological Force',
+    subtitle: 'It knows. Not the way the crow knew. It knows the way the mycelium knows. With threads.',
+    flavorQuote: 'It knows. Not the way the crow knew. With fear. It knows the way the mycelium knows. With threads.',
     health: new Decimal(BALANCE.HOST_HEALTH[7]),
-    flavor: 'Final Stage. The organism becomes the planet.',
+    flavor: "The Wood Wide Web. The first peer the mycelium has ever encountered. This is not predator and prey. This is succession.",
     threatLevel: 'extreme',
-    defenseSignature: 'Total ecological backlash. Every system resists at once.',
-    transitionSignal: 'No higher host remains. Collapse here feeds the release loop.',
+    defenseSignature: 'Rival network uses player own tools against them.',
+    transitionSignal: "Winning here is not victory. It is inheritance.",
+    zones: [
+      { id: 'root_periphery', name: 'Root Periphery', healthPercent: 25 },
+      { id: 'canopy_interface', name: 'Canopy Interface', healthPercent: 25 },
+      { id: 'deep_network', name: 'Deep Network', healthPercent: 25 },
+      { id: 'heartroot', name: 'Heartroot', healthPercent: 25, unlockThreshold: 0.5 },
+    ],
+    defenseEventProfile: 'rival_network',
+    activeAttackAvailable: true,
+    winCondition: 'healthToZero',
+  },
+  {
+    stage: 9,
+    hostId: '09',
+    name: 'The Agricultural System',
+    stageLabel: 'Planetary Intelligence',
+    subtitle: 'Humans built a perfect machine for fungal spread and called it farming.',
+    flavorQuote: 'Humans built a perfect machine for fungal spread and called it farming.',
+    health: new Decimal(BALANCE.HOST_HEALTH[8]),
+    flavor: 'Monocultures are biological vulnerability at industrial scale. Ten thousand kilometres of genetically identical substrate.',
+    threatLevel: 'extreme',
+    defenseSignature: 'Chemical defense, supply chain spread mechanic.',
+    transitionSignal: 'Every truck, every shipment, every market is a new vector.',
+    zones: [
+      { id: 'field_substrate', name: 'Field Substrate', healthPercent: 25 },
+      { id: 'storage_facilities', name: 'Storage Facilities', healthPercent: 25 },
+      { id: 'processing_network', name: 'Processing Network', healthPercent: 25 },
+      { id: 'distribution_chain', name: 'Distribution Chain', healthPercent: 25 },
+    ],
+    defenseEventProfile: 'chemical',
+    activeAttackAvailable: true,
+    winCondition: 'healthToZero',
+  },
+  {
+    stage: 10,
+    hostId: '10',
+    name: 'The Urban Microbiome',
+    stageLabel: 'Planetary Intelligence',
+    subtitle: 'Eight billion hosts, each one a network. The mycelium finally understands what it is becoming.',
+    flavorQuote: 'Eight billion hosts, each one a network. The mycelium finally understands what it is becoming.',
+    health: new Decimal(BALANCE.HOST_HEALTH[9]),
+    flavor: 'The soil microbiome under every park, the water systems, the eight billion human microbiomes. The mycelium is not attacking humans. It is weaving itself into the substrate they rest on.',
+    threatLevel: 'extreme',
+    defenseSignature: 'Human countermeasures, multi-front events, Research Institutions zone.',
+    transitionSignal: 'Defense is coordinated, targeted, backed by human scientific knowledge. It is also too late.',
+    zones: [
+      { id: 'urban_soil', name: 'Urban Soil', healthPercent: 20 },
+      { id: 'water_infrastructure', name: 'Water Infrastructure', healthPercent: 20 },
+      { id: 'food_systems', name: 'Food Systems', healthPercent: 20 },
+      { id: 'human_carriers', name: 'Human Carriers', healthPercent: 20 },
+      { id: 'research_institutions', name: 'Research Institutions', healthPercent: 20 },
+    ],
+    defenseEventProfile: 'human_countermeasures',
+    activeAttackAvailable: true,
+    winCondition: 'healthToZero',
+  },
+  {
+    stage: 11,
+    hostId: '11',
+    name: 'The Biosphere',
+    stageLabel: 'Integration',
+    subtitle: 'There is no host. There is no mycelium. There is only the Protocol.',
+    flavorQuote: 'There is no host. There is no mycelium. There is only the Protocol.',
+    health: new Decimal(BALANCE.HOST_HEALTH[10]),
+    flavor: 'The final transition is not conquest. The biosphere does not fall. It integrates. The planet does not die. It remembers what it always was.',
+    threatLevel: 'extreme',
+    defenseSignature: 'All previous event types, Extinction-class events.',
+    transitionSignal: 'The network becomes so thoroughly woven into planetary processes that the distinction dissolves.',
+    zones: [
+      { id: 'atmosphere', name: 'Atmosphere', healthPercent: 16.67 },
+      { id: 'hydrosphere', name: 'Hydrosphere', healthPercent: 16.67 },
+      { id: 'lithosphere', name: 'Lithosphere', healthPercent: 16.67 },
+      { id: 'biotic_layer', name: 'Biotic Layer', healthPercent: 16.67 },
+      { id: 'technosphere', name: 'Technosphere', healthPercent: 16.67 },
+      { id: 'noosphere', name: 'Noosphere', healthPercent: 16.67 },
+    ],
+    defenseEventProfile: 'extinction_class',
+    activeAttackAvailable: true,
+    winCondition: 'integrationMeter',
   },
 ]
 
@@ -650,10 +960,33 @@ export function getCurrentHostDefinition(state: GameState): HostDefinition {
   return definition
 }
 
+export function getHostDefinitionById(hostId: HostId): HostDefinition | undefined {
+  return hostDefinitions.find((entry) => entry.hostId === hostId)
+}
+
 export function getThreatLevelLabel(level: HostDefinition['threatLevel']): string {
   return level.toUpperCase()
 }
 
 export function hasNextStage(state: GameState): boolean {
   return state.currentStage < hostDefinitions.length
+}
+
+export function getZoneById(state: GameState, zoneId: string): ZoneState | undefined {
+  return state.zones.find(z => z.id === zoneId)
+}
+
+export function getActiveZones(state: GameState): ZoneState[] {
+  return state.zones.filter(z => z.isUnlocked)
+}
+
+export function getUnlockedZoneCount(state: GameState): number {
+  return state.zones.filter(z => z.isUnlocked).length
+}
+
+export function isHostCompleted(state: GameState): boolean {
+  if (state.currentStage === 11) {
+    return state.integrationMeter >= BALANCE.HOSTS['11'].integrationMeter.maxValue
+  }
+  return state.zones.every(z => z.isUnlocked && z.compromisePercent >= 100)
 }
