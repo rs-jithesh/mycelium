@@ -644,6 +644,7 @@ body::after {
   z-index: 1;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 1.25rem;
   padding-top: 1.5rem;
   padding-bottom: 1rem;
@@ -1110,9 +1111,7 @@ body::after {
 
 .analysis-panel {
   width: min(46rem, 100%);
-  align-self: center;
-  justify-self: center;
-  margin-top: 0;
+  margin: 0 auto;
 }
 
 .analysis-panel__header,

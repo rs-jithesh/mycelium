@@ -175,6 +175,13 @@ export interface VisibilityState {
   generatorPanelUnlockAt: number | null
 }
 
+export interface GeneticMemoryStats {
+  /** How many prestige runs have contributed to genetic memory */
+  prestigeContributions: number
+  /** Total flat bonus to all stat effectiveness (accumulated from past prestiges) */
+  accumulatedBonus: number
+}
+
 export interface GameState {
   biomass: Decimal
   biomassPerClick: Decimal
@@ -229,6 +236,10 @@ export interface GameState {
   _pendingOfflineEvents: OfflineEvent[]
   hostCorruptionPercent: number
   manifestationQueue: string[]
+  /** Genetic memory for mutation stats - persists across prestiges */
+  geneticMemoryStats: GeneticMemoryStats
+  /** Timestamp for next Mycorrhizal Network pulse (Symbiote signature ability) */
+  nextMycorrhizalPulseAt: number | null
 }
 
 // ============================================================================

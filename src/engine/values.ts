@@ -127,6 +127,11 @@ export function createDefaultState(): GameState {
     _pendingOfflineEvents: [],
     hostCorruptionPercent: 0,
     manifestationQueue: [],
+    geneticMemoryStats: {
+      prestigeContributions: 0,
+      accumulatedBonus: 0,
+    },
+    nextMycorrhizalPulseAt: null,
   }
 }
 

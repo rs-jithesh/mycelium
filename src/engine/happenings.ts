@@ -1002,6 +1002,7 @@ export function tick(state: GameState, now = Date.now()): GameState {
 
   next = tickSignalSystem(next, deltaMs)
   next = tickDefenseResponseState(next, deltaMs)
+  next = tickMycorrhizalNetwork(next, now)
   next = maybeAppendDefenseFlavorLog(next, deltaMs)
 
   // Drain manifestation queue: one message every 2 seconds
@@ -1029,6 +1030,57 @@ function tickDefenseResponseState(state: GameState, deltaMs: number): GameState 
   return {
     ...state,
     activeParasiteDefenseBurstMs: Math.max(0, state.activeParasiteDefenseBurstMs - deltaMs),
+  }
+}
+
+/**
+ * Tick Mycorrhizal Network pulse for Symbiote strain.
+ * Generates bonus biomass based on current BPS at set intervals.
+ */
+function tickMycorrhizalNetwork(state: GameState, now: number): GameState {
+  // Only active for Symbiote strain
+  if (state.strain !== 'symbiote') {
+    return state
+  }
+
+  // Initialize pulse timer if not set
+  if (state.nextMycorrhizalPulseAt === null) {
+    const interval = formulas.getMycorrhizalPulseInterval(state.stats.complexity)
+    return {
+      ...state,
+      nextMycorrhizalPulseAt: now + interval * 1000,
+    }
+  }
+
+  // Check if it's time for a pulse
+  if (now < state.nextMycorrhizalPulseAt) {
+    return state
+  }
+
+  // Calculate pulse gain
+  const pulseMultiplier = formulas.getMycorrhizalPulseMultiplier(state.stats.complexity)
+  const pulseGain = state.biomassPerSecond.mul(pulseMultiplier)
+
+  // Schedule next pulse
+  const interval = formulas.getMycorrhizalPulseInterval(state.stats.complexity)
+  const nextPulseAt = now + interval * 1000
+
+  // Apply gain and log
+  let next = gainBiomass(
+    {
+      ...state,
+      nextMycorrhizalPulseAt: nextPulseAt,
+    },
+    pulseGain,
+    'passive'
+  )
+
+  return {
+    ...next,
+    log: clampLog([
+      ...next.log,
+      createLogEntry(`Mycorrhizal Network pulse. Network resonance yielded ${formulas.formatDecimal(pulseGain)} biomass.`),
+    ]),
   }
 }
 
@@ -1307,17 +1359,17 @@ export function absorb(state: GameState): GameState {
     'click'
   )
 
-  if (state.strain === 'parasite' && clickCount % BALANCE.PARASITE_BURST_CLICK_THRESHOLD === 0) {
-    const burstMultiplier = state.unlockedSkills.includes('hemorrhagic-spread')
-      ? BALANCE.PARASITE_BURST_MULTIPLIER_WITH_SKILL
-      : BALANCE.PARASITE_BURST_MULTIPLIER
+  // Hemorrhagic Burst - Parasite signature ability with Virulence scaling
+  const burstInterval = formulas.getHemorrhagicBurstInterval(state.stats.virulence)
+  if (state.strain === 'parasite' && clickCount % burstInterval === 0) {
+    const burstMultiplier = formulas.getHemorrhagicBurstMultiplier(state.stats.virulence)
     const burstGain = next.biomassPerSecond.mul(burstMultiplier)
     next = gainBiomass(next, burstGain, 'passive')
     next = {
       ...next,
       log: clampLog([
         ...next.log,
-        createLogEntry(`Hemorrhagic Burst triggered. Instant absorption gained ${formulas.formatDecimal(burstGain)} biomass.`),
+        createLogEntry(`Hemorrhagic Burst triggered (${burstInterval} clicks). Instant absorption gained ${formulas.formatDecimal(burstGain)} biomass.`),
       ]),
     }
   }
@@ -1445,6 +1497,7 @@ export function allocateStatAction(state: GameState, statId: StatId): GameState 
 
   const next = recalculateDerivedState({
     ...state,
+    mutationPoints: state.mutationPoints - 1,
     stats: {
       ...state.stats,
       [statId]: state.stats[statId] + 1,
@@ -1549,10 +1602,20 @@ export function releaseSporesAction(state: GameState): GameState {
   const freshState = createFreshState()
   const totalMemory = state.geneticMemory.add(memoryGain)
 
+  // Calculate genetic memory for stats (retained from spent mutation points)
+  const spentPoints = formulas.getSpentMutationPoints(state.stats)
+  const newGeneticMemoryStats = formulas.calculateNewGeneticMemoryStats(
+    state.geneticMemoryStats,
+    spentPoints
+  )
+
+  const geneticMemoryBonusPercent = newGeneticMemoryStats.accumulatedBonus * 100
+
   return checkVisibilityUnlocks({
     ...recalculateDerivedState({
       ...freshState,
       geneticMemory: totalMemory,
+      geneticMemoryStats: newGeneticMemoryStats,
       hostEchoes: state.hostEchoes,
       prestigeCount: state.prestigeCount + 1,
       hasPrestiged: true,
@@ -1567,6 +1630,9 @@ export function releaseSporesAction(state: GameState): GameState {
     log: clampLog([
       createLogEntry(
         `Spore Release complete. Genetic Memory preserved. Next run bonus: ${formulas.formatDecimal(formulas.getProjectedGeneticMemoryBonusPercent(state))}%.`
+      ),
+      createLogEntry(
+        `Stat genetic memory retained: +${geneticMemoryBonusPercent.toFixed(1)}% to all future stat effectiveness (${newGeneticMemoryStats.prestigeContributions} runs).`
       ),
       createLogEntry('Saprophyte archive unlocked. A new culture germinates from inherited decay.'),
       createLogEntry('Host contact re-established: dead leaf tissue.'),
@@ -1639,8 +1705,10 @@ function expireDefenseEvents(state: GameState, now: number): GameState {
     ]),
   }
 
+  // Decomposition Loop - Saprophyte signature ability with Resilience scaling
   if (expiredEvents.length > 0 && state.strain === 'saprophyte' && state.biomassPerSecond.gt(0)) {
     let totalRecovered = new Decimal(0)
+    const conversionRate = formulas.getDecompositionConversionRate(state.stats.resilience)
 
     for (const event of expiredEvents) {
       const durationMs = getDefenseEventDurationMs(event.id)
@@ -1651,9 +1719,7 @@ function expireDefenseEvents(state: GameState, now: number): GameState {
       const productionLost = state.biomassPerSecond
         .mul(penaltyDepth)
         .mul(durationMs / 1000)
-      totalRecovered = totalRecovered.add(
-        productionLost.mul(BALANCE.STRAIN_SAPROPHYTE_DEFENSE_RECOVERY_FRACTION)
-      )
+      totalRecovered = totalRecovered.add(productionLost.mul(conversionRate))
     }
 
     if (totalRecovered.gt(0)) {
@@ -1662,7 +1728,7 @@ function expireDefenseEvents(state: GameState, now: number): GameState {
         biomass: next.biomass.add(totalRecovered),
         log: appendLog(
           next.log,
-          `Saprophyte salvage reclaimed ${formulas.formatDecimal(totalRecovered)} biomass from defense decay.`
+          `Decomposition Loop: +${formulas.formatDecimal(totalRecovered)} Biomass recovered (${Math.round(conversionRate * 100)}% conversion rate).`
         ),
       }
     }
@@ -2008,6 +2074,11 @@ interface SerializedState {
   }>
   hostCorruptionPercent: number
   manifestationQueue: string[]
+  geneticMemoryStats?: {
+    prestigeContributions: number
+    accumulatedBonus: number
+  }
+  nextMycorrhizalPulseAt?: number | null
 }
 
 function toDecimal(value: string | number | Decimal): Decimal {
@@ -2075,6 +2146,8 @@ function serialize(s: GameState): SerializedState {
     })),
     hostCorruptionPercent: s.hostCorruptionPercent,
     manifestationQueue: s.manifestationQueue,
+    geneticMemoryStats: s.geneticMemoryStats,
+    nextMycorrhizalPulseAt: s.nextMycorrhizalPulseAt,
   }
 }
 
@@ -2167,6 +2240,8 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
     _pendingOfflineEvents: normalizeOfflineEvents(raw._pendingOfflineEvents),
     hostCorruptionPercent: raw.hostCorruptionPercent ?? base.hostCorruptionPercent,
     manifestationQueue: raw.manifestationQueue ?? base.manifestationQueue,
+    geneticMemoryStats: raw.geneticMemoryStats ?? base.geneticMemoryStats,
+    nextMycorrhizalPulseAt: raw.nextMycorrhizalPulseAt ?? base.nextMycorrhizalPulseAt,
   }
 
   return checkVisibilityUnlocks(recalculateDerivedState(normalized), now)

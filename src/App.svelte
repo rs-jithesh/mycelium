@@ -26,6 +26,9 @@
     hasNextStage,
     formatDecimal,
     formatDuration,
+    getClicksUntilBurst,
+    getStrainSynergyLabel,
+    getEffectiveStatBonus,
   } from './engine/formulas'
   import { BALANCE } from './engine/balance.config'
   import { defenseFlavorDefinitions } from './engine/happenings'
@@ -837,6 +840,14 @@
         >
           INITIATE ABSORPTION
         </TerminalButton>
+
+        {#if $game.strain === 'parasite'}
+          {@const clicksUntilBurst = getClicksUntilBurst($game.clickCount, $game.stats.virulence)}
+          <div class="burst-counter">
+            <span class="burst-counter__icon">⚡</span>
+            <span class="burst-counter__text">Burst in {clicksUntilBurst} click{clicksUntilBurst === 1 ? '' : 's'}</span>
+          </div>
+        {/if}
       </div>
 
       {#if latestLogEntry}
@@ -1085,7 +1096,8 @@
                   <div class="module-card__footer">
                     <span>
                       {#if getGeneratorDisruption(generator.id)}
-                        OUTPUT: DISRUPTED [{getRemainingDurationLabel(getGeneratorDisruption(generator.id)!.endsAt)}]
+                        {@const disruption = getGeneratorDisruption(generator.id)}
+                        OUTPUT: DISRUPTED [{disruption ? getRemainingDurationLabel(disruption.endsAt) : ''}]
                       {:else}
                         OUTPUT: +{formatBiomass(getGeneratorProduction($game, generator.id), useScientificNotation)} Ψ/sec
                       {/if}
@@ -1335,7 +1347,8 @@
                   <p>{generator.flavor.toUpperCase()}</p>
                   <p class="mobile-generator-row__meta">
                     {#if getGeneratorDisruption(generator.id)}
-                      OUTPUT: DISRUPTED [{getRemainingDurationLabel(getGeneratorDisruption(generator.id)!.endsAt)}]
+                      {@const disruption = getGeneratorDisruption(generator.id)}
+                      OUTPUT: DISRUPTED [{disruption ? getRemainingDurationLabel(disruption.endsAt) : ''}]
                     {:else}
                       OUTPUT: +{formatBiomass(getGeneratorProduction($game, generator.id), useScientificNotation)} Ψ/SEC
                     {/if}
@@ -1428,39 +1441,63 @@
 
             <div class="dual-panel-grid">
               {#if $game.visibility.statsPanel}
+              {@const virulenceSynergy = getStrainSynergyLabel($game.strain, 'virulence')}
+              {@const resilienceSynergy = getStrainSynergyLabel($game.strain, 'resilience')}
+              {@const complexitySynergy = getStrainSynergyLabel($game.strain, 'complexity')}
               <TerminalPanel title="CORE ATTRIBUTES" tag="STATS" variant="low" bleedHeader={true} resizable={true} resizeAxis="both">
                 <div class="desktop-attribute-list">
                   <div class="desktop-attribute-card">
                     <div class="desktop-attribute-card__header">
                       <span>VIRULENCE [V: {$game.stats.virulence}]</span>
                       <div class="desktop-attribute-card__header-side">
+                        {#if virulenceSynergy}<span class="synergy-tag synergy-tag--{virulenceSynergy}">{virulenceSynergy === 'synergy' ? '⚡ SYNERGY' : virulenceSynergy === 'opposition' ? '⚠ OPPOSITION' : '○ NEUTRAL'}</span>{/if}
                         <span>EXPANSION ENGINE</span>
                         <button class="desktop-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('virulence')}>+</button>
                       </div>
                     </div>
                     <p>Aggressive spread protocol. Increases click-power efficiency by 15% per rank.</p>
+                    {#if $game.mutationPoints > 0}
+                      {@const currentBonus = getEffectiveStatBonus($game.stats.virulence, BALANCE.VIRULENCE_CLICK_BONUS_PER_POINT, $game.strain, 'virulence', $game.geneticMemoryStats)}
+                      {@const nextBonus = getEffectiveStatBonus($game.stats.virulence + 1, BALANCE.VIRULENCE_CLICK_BONUS_PER_POINT, $game.strain, 'virulence', $game.geneticMemoryStats)}
+                      {@const increase = ((nextBonus - currentBonus) / currentBonus * 100) || (nextBonus * 100)}
+                      <p class="stat-preview">Next: Click power +{increase.toFixed(1)}%</p>
+                    {/if}
                   </div>
 
                   <div class="desktop-attribute-card">
                     <div class="desktop-attribute-card__header">
                       <span>RESILIENCE [R: {$game.stats.resilience}]</span>
                       <div class="desktop-attribute-card__header-side">
+                        {#if resilienceSynergy}<span class="synergy-tag synergy-tag--{resilienceSynergy}">{resilienceSynergy === 'synergy' ? '⚡ SYNERGY' : resilienceSynergy === 'opposition' ? '⚠ OPPOSITION' : '○ NEUTRAL'}</span>{/if}
                         <span>SURVIVAL MESH</span>
                         <button class="desktop-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('resilience')}>+</button>
                       </div>
                     </div>
                     <p>Cellular wall density. Reduces system defense resistance by 8% per rank.</p>
+                    {#if $game.mutationPoints > 0}
+                      {@const currentBonus = getEffectiveStatBonus($game.stats.resilience, BALANCE.RESILIENCE_DEFENSE_PER_POINT, $game.strain, 'resilience', $game.geneticMemoryStats)}
+                      {@const nextBonus = getEffectiveStatBonus($game.stats.resilience + 1, BALANCE.RESILIENCE_DEFENSE_PER_POINT, $game.strain, 'resilience', $game.geneticMemoryStats)}
+                      {@const increase = ((nextBonus - currentBonus) * 100) || (nextBonus * 100)}
+                      <p class="stat-preview">Next: Defense mitigation +{increase.toFixed(1)}%</p>
+                    {/if}
                   </div>
 
                   <div class="desktop-attribute-card">
                     <div class="desktop-attribute-card__header">
                       <span>COMPLEXITY [C: {$game.stats.complexity}]</span>
                       <div class="desktop-attribute-card__header-side">
+                        {#if complexitySynergy}<span class="synergy-tag synergy-tag--{complexitySynergy}">{complexitySynergy === 'synergy' ? '⚡ SYNERGY' : complexitySynergy === 'opposition' ? '⚠ OPPOSITION' : '○ NEUTRAL'}</span>{/if}
                         <span>COGNITIVE ARCH</span>
                         <button class="desktop-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('complexity')}>+</button>
                       </div>
                     </div>
                     <p>Synaptic mapping. Improves passive output and upgrade efficiency.</p>
+                    {#if $game.mutationPoints > 0}
+                      {@const currentBonus = getEffectiveStatBonus($game.stats.complexity, BALANCE.COMPLEXITY_PASSIVE_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
+                      {@const nextBonus = getEffectiveStatBonus($game.stats.complexity + 1, BALANCE.COMPLEXITY_PASSIVE_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
+                      {@const increase = ((nextBonus - currentBonus) * 100) || (nextBonus * 100)}
+                      <p class="stat-preview">Next: Passive BPS +{increase.toFixed(1)}%</p>
+                    {/if}
                   </div>
 
                   <div class="readiness-banner">STATUS :: {getReadinessStatus()}</div>
@@ -2077,23 +2114,26 @@ MYCELIUM_ROOT_v1`}</pre>
             {/each}
           </div>
 
-          <div class="mobile-wiki-article">
-            {#if getVisibleWikiEntry()}
-              <h2>{getVisibleWikiEntry()!.title}</h2>
-              <p class="wiki-article__summary">{getVisibleWikiEntry()!.summary}</p>
-              {#each getVisibleWikiEntry()!.content as paragraph}
-                <p>{paragraph}</p>
-              {/each}
-            {:else}
-              <h2>No Results</h2>
-              <p class="wiki-article__summary">No wiki entries match the current search and section filters.</p>
-            {/if}
-          </div>
-        </div>
-      </div>
-    </div>
-  {/if}
-</div>
-{/if}
+          {#if true}
+            {@const visibleEntry = getVisibleWikiEntry()}
+            <div class="mobile-wiki-article">
+              {#if visibleEntry}
+                <h2>{visibleEntry.title}</h2>
+                <p class="wiki-article__summary">{visibleEntry.summary}</p>
+                {#each visibleEntry.content as paragraph}
+                  <p>{paragraph}</p>
+                {/each}
+              {:else}
+                <h2>No Results</h2>
+                <p class="wiki-article__summary">No wiki entries match the current search and section filters.</p>
+              {/if}
+             </div>
+           {/if}
+         </div>
+       </div>
+     </div>
+   {/if}
+ </div>
+ {/if}
 
-<DefenseToast state={$game} />
+ <DefenseToast state={$game} />

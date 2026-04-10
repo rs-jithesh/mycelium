@@ -6,7 +6,7 @@
 
 import Decimal from 'break_eternity.js'
 import { BALANCE } from './balance.config'
-import type { DefenseEventId, GameState, GeneratorId, UpgradeId, SkillId, StrainId } from '../lib/game'
+import type { DefenseEventId, GameState, GeneratorId, UpgradeId, SkillId, StrainId, StatId } from '../lib/game'
 import {
   generatorDefinitions,
   upgradeDefinitions,
@@ -41,6 +41,130 @@ function getSkillDef(skillId: SkillId) {
   const def = skillDefinitions.find((d) => d.id === skillId)
   if (!def) throw new Error(`Unknown skill: ${skillId}`)
   return def
+}
+
+// --- STRAIN-STAT SYNERGY SYSTEM ---
+
+// Synergy map: which stats align with which strains
+// Parasite → Virulence (synergy), Complexity (opposition), Resilience (neutral)
+// Symbiote → Complexity (synergy), Virulence (opposition), Resilience (neutral)
+// Saprophyte → Resilience (synergy), no opposition (hybrid)
+const STRAIN_SYNERGY_MAP: Record<StrainId, { synergy: StatId; opposition: StatId | null }> = {
+  parasite: { synergy: 'virulence', opposition: 'complexity' },
+  symbiote: { synergy: 'complexity', opposition: 'virulence' },
+  saprophyte: { synergy: 'resilience', opposition: null },
+}
+
+/**
+ * Get the synergy modifier for a strain-stat combination.
+ * Returns STRAIN_SYNERGY_MULTIPLIER if stat aligns with strain archetype,
+ * STRAIN_OPPOSITION_MULTIPLIER if stat opposes strain archetype,
+ * or 1.0 if neutral.
+ */
+export function getStrainSynergyModifier(strain: StrainId | null, stat: StatId): number {
+  if (!strain) return 1.0
+
+  const mapping = STRAIN_SYNERGY_MAP[strain]
+  if (!mapping) return 1.0
+
+  if (stat === mapping.synergy) {
+    return BALANCE.STRAIN_SYNERGY_MULTIPLIER
+  }
+  if (stat === mapping.opposition) {
+    return BALANCE.STRAIN_OPPOSITION_MULTIPLIER
+  }
+  return 1.0
+}
+
+/**
+ * Get the synergy label for UI display.
+ * Returns 'synergy' | 'opposition' | 'neutral' | null (if no strain selected)
+ */
+export function getStrainSynergyLabel(strain: StrainId | null, stat: StatId): 'synergy' | 'opposition' | 'neutral' | null {
+  if (!strain) return null
+
+  const mapping = STRAIN_SYNERGY_MAP[strain]
+  if (!mapping) return null
+
+  if (stat === mapping.synergy) return 'synergy'
+  if (stat === mapping.opposition) return 'opposition'
+  return 'neutral'
+}
+
+/**
+ * Calculate the effective bonus for a stat considering soft cap and synergy.
+ *
+ * Formula:
+ * - Points 1 to STAT_SOFT_CAP_THRESHOLD: full baseBonus each
+ * - Points beyond threshold: baseBonus × SOFT_CAP_FALLOFF^i for each overage point i
+ * - Result is then multiplied by strain synergy modifier
+ *
+ * Example with 5 points, base 0.15, cap at 3, falloff 0.65, synergy 1.35:
+ * - Full points: 3 × 0.15 = 0.45
+ * - Overage: 0.15 × 0.65 + 0.15 × 0.65² = 0.0975 + 0.063375 = 0.160875
+ * - Pre-synergy: 0.610875
+ * - Post-synergy: 0.610875 × 1.35 = 0.82468125
+ */
+export function getEffectiveStatBonus(
+  points: number,
+  baseBonus: number,
+  strain: StrainId | null,
+  stat: StatId,
+  geneticMemoryStats?: { accumulatedBonus: number }
+): number {
+  if (points <= 0) return 0
+
+  const threshold = BALANCE.STAT_SOFT_CAP_THRESHOLD
+  const falloff = BALANCE.SOFT_CAP_FALLOFF
+
+  let preCapBonus: number
+
+  if (points <= threshold) {
+    // Full effectiveness for all points
+    preCapBonus = points * baseBonus
+  } else {
+    // Full effectiveness up to threshold, then diminishing returns
+    const fullPoints = threshold * baseBonus
+    let overageBonus = 0
+    const overagePoints = points - threshold
+
+    for (let i = 1; i <= overagePoints; i++) {
+      overageBonus += baseBonus * Math.pow(falloff, i)
+    }
+
+    preCapBonus = fullPoints + overageBonus
+  }
+
+  // Apply strain synergy
+  const synergyModifier = getStrainSynergyModifier(strain, stat)
+  let result = preCapBonus * synergyModifier
+
+  // Apply genetic memory bonus if provided
+  if (geneticMemoryStats && geneticMemoryStats.accumulatedBonus > 0) {
+    result *= getGeneticMemoryStatMultiplier(geneticMemoryStats)
+  }
+
+  return result
+}
+
+/**
+ * Check if Saprophyte hybrid bonus threshold is met.
+ * Requires SAPROPHYTE_HYBRID_BONUS_THRESHOLD total points across at least 2 different stats.
+ */
+export function isSaprophyteHybridBonusActive(stats: Record<StatId, number>): boolean {
+  const totalPoints = stats.virulence + stats.resilience + stats.complexity
+  if (totalPoints < BALANCE.SAPROPHYTE_HYBRID_BONUS_THRESHOLD) return false
+
+  // Count how many stats have points
+  const statsWithPoints = [stats.virulence, stats.resilience, stats.complexity].filter((p) => p > 0).length
+  return statsWithPoints >= 2
+}
+
+/**
+ * Get Saprophyte hybrid bonus multiplier if active, otherwise 1.0
+ */
+export function getSaprophyteHybridMultiplier(stats: Record<StatId, number>): number {
+  return isSaprophyteHybridBonusActive(stats) ? BALANCE.SAPROPHYTE_HYBRID_BONUS_MULTIPLIER : 1.0
 }
 
 // --- COST FORMULAS ---
@@ -93,6 +217,110 @@ export function getSpentMutationPoints(stats: Record<string, number>): number {
   return Object.values(stats).reduce((total, value) => total + value, 0)
 }
 
+/**
+ * Calculate genetic memory points to retain from a prestige.
+ * Returns floor(totalSpentPoints × GENETIC_MEMORY_POINTS_RETAINED_PERCENT)
+ */
+export function calculateGeneticMemoryPointsToRetain(totalSpentPoints: number): number {
+  return Math.floor(totalSpentPoints * BALANCE.GENETIC_MEMORY_POINTS_RETAINED_PERCENT)
+}
+
+/**
+ * Calculate the new genetic memory stats after a prestige.
+ * Caps prestige contributions at GENETIC_MEMORY_MAX_STACKS.
+ */
+export function calculateNewGeneticMemoryStats(
+  currentMemory: { prestigeContributions: number; accumulatedBonus: number },
+  spentPointsThisRun: number
+): { prestigeContributions: number; accumulatedBonus: number } {
+  const pointsToAdd = calculateGeneticMemoryPointsToRetain(spentPointsThisRun)
+
+  if (pointsToAdd <= 0) {
+    return { ...currentMemory }
+  }
+
+  const newContributions = Math.min(
+    BALANCE.GENETIC_MEMORY_MAX_STACKS,
+    currentMemory.prestigeContributions + 1
+  )
+
+  const newAccumulatedBonus = currentMemory.accumulatedBonus + pointsToAdd * BALANCE.GENETIC_MEMORY_BONUS_PER_STACK
+
+  return {
+    prestigeContributions: newContributions,
+    accumulatedBonus: newAccumulatedBonus,
+  }
+}
+
+/**
+ * Get the genetic memory multiplier for stat effectiveness.
+ * Returns 1 + accumulatedBonus (so 0.10 bonus becomes 1.10 multiplier)
+ */
+export function getGeneticMemoryStatMultiplier(geneticMemoryStats: { accumulatedBonus: number }): number {
+  return 1 + geneticMemoryStats.accumulatedBonus
+}
+
+// --- SIGNATURE ABILITY FORMULAS ---
+
+/**
+ * Calculate Hemorrhagic Burst click interval.
+ * Base interval reduced by Virulence points.
+ * Each Virulence point reduces interval by HEMORRHAGIC_VIRULENCE_INTERVAL_REDUCTION.
+ */
+export function getHemorrhagicBurstInterval(virulencePoints: number): number {
+  const reduction = virulencePoints * BALANCE.HEMORRHAGIC_VIRULENCE_INTERVAL_REDUCTION
+  return Math.max(1, BALANCE.HEMORRHAGIC_BURST_BASE_INTERVAL - reduction)
+}
+
+/**
+ * Calculate Hemorrhagic Burst multiplier.
+ * Base multiplier increased by Virulence points.
+ * Each Virulence point adds HEMORRHAGIC_VIRULENCE_MULTIPLIER_BONUS.
+ */
+export function getHemorrhagicBurstMultiplier(virulencePoints: number): number {
+  const bonus = virulencePoints * BALANCE.HEMORRHAGIC_VIRULENCE_MULTIPLIER_BONUS
+  return BALANCE.HEMORRHAGIC_BURST_BASE_MULTIPLIER * (1 + bonus)
+}
+
+/**
+ * Get the number of clicks until next Hemorrhagic Burst.
+ */
+export function getClicksUntilBurst(currentClickCount: number, virulencePoints: number): number {
+  const interval = getHemorrhagicBurstInterval(virulencePoints)
+  const clicksSinceLastBurst = currentClickCount % interval
+  return interval - clicksSinceLastBurst
+}
+
+/**
+ * Calculate Mycorrhizal Network pulse interval in seconds.
+ * Base interval reduced by Complexity points.
+ * Each Complexity point reduces interval by MYCORRHIZAL_COMPLEXITY_INTERVAL_REDUCTION.
+ */
+export function getMycorrhizalPulseInterval(complexityPoints: number): number {
+  const reduction = complexityPoints * BALANCE.MYCORRHIZAL_COMPLEXITY_INTERVAL_REDUCTION
+  return Math.max(5, BALANCE.MYCORRHIZAL_BASE_INTERVAL_SECONDS - reduction)
+}
+
+/**
+ * Calculate Mycorrhizal Network pulse multiplier.
+ * Base multiplier increased by Complexity points.
+ * Each Complexity point adds MYCORRHIZAL_COMPLEXITY_PULSE_BONUS.
+ */
+export function getMycorrhizalPulseMultiplier(complexityPoints: number): number {
+  const bonus = complexityPoints * BALANCE.MYCORRHIZAL_COMPLEXITY_PULSE_BONUS
+  return BALANCE.MYCORRHIZAL_BASE_PULSE_MULTIPLIER * (1 + bonus)
+}
+
+/**
+ * Calculate Decomposition Loop conversion rate.
+ * Base rate increased by Resilience points.
+ * Each Resilience point adds DECOMPOSITION_RESILIENCE_BONUS_PER_POINT.
+ */
+export function getDecompositionConversionRate(resiliencePoints: number): number {
+  const bonus = resiliencePoints * BALANCE.DECOMPOSITION_RESILIENCE_BONUS_PER_POINT
+  return Math.min(1.0, BALANCE.DECOMPOSITION_BASE_CONVERSION_RATE + bonus)
+}
+
 // --- PRESTIGE FORMULAS ---
 
 export function getProjectedGeneticMemoryGain(state: GameState): Decimal {
@@ -126,9 +354,21 @@ export function getProjectedGeneticMemoryBonusPercent(state: GameState): Decimal
 // --- DEFENSE FORMULAS ---
 
 export function getDefenseMitigation(state: GameState): number {
+  // Use new synergy-aware calculation for Resilience
+  const resilienceBonus = getEffectiveStatBonus(
+    state.stats.resilience,
+    BALANCE.RESILIENCE_DEFENSE_PER_POINT,
+    state.strain,
+    'resilience',
+    state.geneticMemoryStats
+  )
+
+  // Apply Saprophyte hybrid bonus if active
+  const hybridMultiplier = state.strain === 'saprophyte' ? getSaprophyteHybridMultiplier(state.stats) : 1.0
+
   let mitigation = Math.min(
     BALANCE.DEFENSE_MITIGATION_MAX_FROM_RESILIENCE,
-    state.stats.resilience * BALANCE.DEFENSE_MITIGATION_PER_RESILIENCE
+    resilienceBonus * hybridMultiplier
   )
 
   if (hasSkillInState(state, 'chitin-shell')) {
@@ -189,7 +429,19 @@ export function getClickDefenseMultiplier(state: GameState): Decimal {
 // --- PRODUCTION FORMULAS ---
 
 export function getUpgradeEffectivenessMultiplier(state: GameState): Decimal {
-  let multiplier = new Decimal(1 + state.stats.complexity * BALANCE.COMPLEXITY_UPGRADE_EFFECTIVENESS_PER_POINT)
+  // Use new synergy-aware calculation for Complexity
+  const complexityBonus = getEffectiveStatBonus(
+    state.stats.complexity,
+    BALANCE.COMPLEXITY_UPGRADE_EFFECTIVENESS_PER_POINT,
+    state.strain,
+    'complexity',
+    state.geneticMemoryStats
+  )
+
+  // Apply Saprophyte hybrid bonus if active
+  const hybridMultiplier = state.strain === 'saprophyte' ? getSaprophyteHybridMultiplier(state.stats) : 1.0
+
+  let multiplier = new Decimal(1 + complexityBonus * hybridMultiplier)
 
   if (hasSkillInState(state, 'signal-amplification')) {
     multiplier = multiplier.mul(BALANCE.SIGNAL_AMPLIFICATION_EFFECTIVENESS_MULTIPLIER)
@@ -199,10 +451,30 @@ export function getUpgradeEffectivenessMultiplier(state: GameState): Decimal {
 }
 
 export function getPassiveStatMultiplier(state: GameState): Decimal {
-  let multiplier = new Decimal(1 + state.stats.complexity * BALANCE.COMPLEXITY_PASSIVE_BONUS_PER_POINT)
+  // Use new synergy-aware calculation for Complexity
+  const complexityBonus = getEffectiveStatBonus(
+    state.stats.complexity,
+    BALANCE.COMPLEXITY_PASSIVE_PER_POINT,
+    state.strain,
+    'complexity',
+    state.geneticMemoryStats
+  )
 
-  if (state.stats.complexity >= 1) {
-    multiplier = multiplier.mul(1.05)
+  // Apply Saprophyte hybrid bonus if active
+  const hybridMultiplier = state.strain === 'saprophyte' ? getSaprophyteHybridMultiplier(state.stats) : 1.0
+
+  let multiplier = new Decimal(1 + complexityBonus * hybridMultiplier)
+
+  // Saprophyte unique: Resilience also adds passive BPS
+  if (state.strain === 'saprophyte') {
+    const resiliencePassiveBonus = getEffectiveStatBonus(
+      state.stats.resilience,
+      BALANCE.SAPROPHYTE_RESILIENCE_CONVERTS_TO_PASSIVE,
+      state.strain,
+      'resilience',
+      state.geneticMemoryStats
+    )
+    multiplier = multiplier.mul(1 + resiliencePassiveBonus * hybridMultiplier)
   }
 
   if (hasSkillInState(state, 'enzymatic-breakdown')) {
@@ -343,8 +615,20 @@ export function getProductionMultiplier(state: GameState, generatorId: Generator
 
 export function getSignalCap(state: GameState): number {
   const base = BALANCE.SIGNAL.BASE_CAP
-  const complexityBonus = state.stats.complexity * BALANCE.SIGNAL.COMPLEXITY_CAP_BONUS_PER_POINT
-  let cap = base + complexityBonus
+
+  // Use new synergy-aware calculation for Complexity
+  const complexityBonus = getEffectiveStatBonus(
+    state.stats.complexity,
+    BALANCE.SIGNAL.COMPLEXITY_CAP_BONUS_PER_POINT,
+    state.strain,
+    'complexity',
+    state.geneticMemoryStats
+  )
+
+  // Apply Saprophyte hybrid bonus if active
+  const hybridMultiplier = state.strain === 'saprophyte' ? getSaprophyteHybridMultiplier(state.stats) : 1.0
+
+  let cap = base + complexityBonus * hybridMultiplier
 
   const echoBonuses = Object.values(state.hostEchoes)
   const patientCount = echoBonuses.filter((e) => e === 'patient').length
@@ -394,8 +678,20 @@ export function getSignalDecayRate(state: GameState): number {
 
   if (state.signal <= threshold) return 0
 
+  // Use new synergy-aware calculation for Complexity decay reduction
+  const decayReduction = getEffectiveStatBonus(
+    state.stats.complexity,
+    BALANCE.SIGNAL.COMPLEXITY_DECAY_REDUCTION_PER_POINT,
+    state.strain,
+    'complexity',
+    state.geneticMemoryStats
+  )
+
+  // Apply Saprophyte hybrid bonus if active
+  const hybridMultiplier = state.strain === 'saprophyte' ? getSaprophyteHybridMultiplier(state.stats) : 1.0
+
   let rate = BALANCE.SIGNAL.DECAY_RATE_PER_SECOND
-  rate -= state.stats.complexity * BALANCE.SIGNAL.COMPLEXITY_DECAY_REDUCTION_PER_POINT
+  rate -= decayReduction * hybridMultiplier
   rate = Math.max(0.01, rate)
 
   if (state.strain === 'saprophyte') {
@@ -561,10 +857,22 @@ export function getBaseClickValue(state: GameState): Decimal {
     value = value.mul(BALANCE.TERMINUS_STRIKE_CLICK_MULTIPLIER)
   }
 
-  // Virulence stat bonuses (old flat strain click multipliers are retired)
-  value = value.mul(1 + state.stats.virulence * BALANCE.VIRULENCE_CLICK_BONUS_PER_POINT)
+  // Virulence stat bonuses with synergy and soft cap
+  const virulenceBonus = getEffectiveStatBonus(
+    state.stats.virulence,
+    BALANCE.VIRULENCE_CLICK_BONUS_PER_POINT,
+    state.strain,
+    'virulence',
+    state.geneticMemoryStats
+  )
 
-  if (state.stats.virulence >= 3) {
+  // Apply Saprophyte hybrid bonus if active
+  const hybridMultiplier = state.strain === 'saprophyte' ? getSaprophyteHybridMultiplier(state.stats) : 1.0
+
+  value = value.mul(1 + virulenceBonus * hybridMultiplier)
+
+  // Threshold bonus at VIRULENCE_THRESHOLD points (applies after synergy)
+  if (state.stats.virulence >= BALANCE.VIRULENCE_THRESHOLD) {
     value = value.mul(BALANCE.VIRULENCE_THRESHOLD_BONUS)
   }
 
@@ -602,9 +910,12 @@ export function calculateOfflineGains(state: GameState, now = Date.now()): Decim
   const secondsOffline = elapsed / 1000
 
   let efficiency = BALANCE.BASE_OFFLINE_EFFICIENCY
-  if (state.stats.resilience >= 3) {
+
+  // Resilience threshold bonus for offline efficiency (using new threshold constant)
+  if (state.stats.resilience >= BALANCE.VIRULENCE_THRESHOLD) {
     efficiency += BALANCE.RESILIENCE_OFFLINE_BONUS
   }
+
   if (hasSkillInState(state, 'dormancy-protocol')) {
     efficiency += BALANCE.DORMANCY_PROTOCOL_OFFLINE_BONUS
   }

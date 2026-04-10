@@ -303,4 +303,96 @@ export const BALANCE = {
   NOTATION_LOCALE_MAX: 1_000,
   NOTATION_LOCALE_MAX_FULL: 1_000_000,
   NOTATION_SHORTHAND_MAX: 1e15,
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STRAIN & MUTATION SYSTEM
+  // All tunables for the strain-stat synergy, soft caps, and signature abilities.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // --- Stat Soft Caps ---
+  // Past this point spend, each additional point yields diminishing returns
+  // Threshold at 3: Allows meaningful early investment while creating strategic
+  // tension around point 4-5. Players feel the cap without it being oppressive.
+  STAT_SOFT_CAP_THRESHOLD: 3,
+  // 65% falloff: Each point past cap is worth 65% of previous. This creates a
+  // smooth curve where point 4 = 65%, point 5 = 42%, point 6 = 27% effectiveness.
+  // At 50% falloff the drop feels too harsh; at 75% the cap barely matters.
+  SOFT_CAP_FALLOFF: 0.65,
+
+  // --- Stat Base Values ---
+  // 15% click bonus: At 3 points with synergy, Parasite gets ~60% click boost
+  // which feels significant without overshadowing generators.
+  VIRULENCE_CLICK_BONUS_PER_POINT: 0.15,
+  // Threshold bonus at 25%: Reward for committing to 3 points in a stat.
+  // Applies after synergy multipliers for maximum impact.
+  VIRULENCE_THRESHOLD_BONUS: 0.25,
+  VIRULENCE_THRESHOLD: 3,
+  // 8% defense mitigation: At 3 points with synergy, Saprophyte gets ~32% mitigation
+  // which meaningfully extends event survival without trivializing defenses.
+  RESILIENCE_DEFENSE_PER_POINT: 0.08,
+  // 5% BPS per point: Modest but stacking. At 5 points with synergy, ~33% BPS boost.
+  COMPLEXITY_PASSIVE_PER_POINT: 0.05,
+  // 2% upgrade effectiveness: Subtle but compounds with other bonuses.
+  COMPLEXITY_UPGRADE_EFFECTIVENESS_PER_POINT: 0.02,
+
+  // --- Strain-Stat Interaction Multipliers ---
+  // 35% synergy bonus: Creates meaningful identity. Aligned stat feels "correct".
+  STRAIN_SYNERGY_MULTIPLIER: 1.35,
+  // 30% opposition penalty: Opposed stat still viable but clearly suboptimal.
+  // 0.70 (vs 1.35) creates a ~2x power gap which defines build identity.
+  STRAIN_OPPOSITION_MULTIPLIER: 0.70,
+
+  // --- Saprophyte Unique Mechanics ---
+  // 3% BPS per Resilience: Makes Resilience economically interesting for Saprophyte
+  // where it's normally just defensive. 3% × 5 points = 15% extra BPS.
+  SAPROPHYTE_RESILIENCE_CONVERTS_TO_PASSIVE: 0.03,
+  // Hybrid threshold at 5: Requires meaningful diversification. Prevents "1 point
+  // in everything" abuse while rewarding genuine hybrid builds.
+  SAPROPHYTE_HYBRID_BONUS_THRESHOLD: 5,
+  // 20% bonus when hybrid: Significant but not overwhelming. Rewards the
+  // opportunity cost of not maxing one stat.
+  SAPROPHYTE_HYBRID_BONUS_MULTIPLIER: 1.20,
+
+  // --- Prestige Genetic Memory ---
+  // 10% retention: Each prestige, 10% of spent points become permanent bonus.
+  // At 20 points spent, that's 2 permanent stacks. Slow but noticeable growth.
+  GENETIC_MEMORY_POINTS_RETAINED_PERCENT: 0.10,
+  // Cap at 5 stacks: Prevents infinite scaling. 5 prestiges = max memory bonus.
+  GENETIC_MEMORY_MAX_STACKS: 5,
+  // 2% per stack: At max stacks, +10% to all stat effectiveness permanently.
+  // Compounds with other bonuses for meaningful long-term progression.
+  GENETIC_MEMORY_BONUS_PER_STACK: 0.02,
+
+  // --- Mutation Point Earning ---
+  // First host grants 2 points: Allows immediate meaningful choice (1 point in
+  // two stats, or 2 in one). Creates early build direction.
+  FIRST_HOST_POINTS: 2,
+  // Subsequent hosts grant 1 point: Slower growth maintains point value.
+  SUBSEQUENT_HOST_POINTS: 1,
+
+  // --- Hemorrhagic Burst (Parasite Signature) ---
+  // Base interval 10 clicks: Frequent enough to feel active, not spammy.
+  HEMORRHAGIC_BURST_BASE_INTERVAL: 10,
+  // Base 3x multiplier: Significant burst without being game-breaking.
+  HEMORRHAGIC_BURST_BASE_MULTIPLIER: 3.0,
+  // Each Virulence point reduces interval by 0.5: At 6 Virulence, burst every 7 clicks.
+  HEMORRHAGIC_VIRULENCE_INTERVAL_REDUCTION: 0.5,
+  // Each Virulence point adds 15% to burst: At 6 Virulence, 3.0 × 1.9 = 5.7x burst.
+  HEMORRHAGIC_VIRULENCE_MULTIPLIER_BONUS: 0.15,
+
+  // --- Mycorrhizal Network (Symbiote Signature) ---
+  // Base interval 30 seconds: Passive rhythm, not frantic.
+  MYCORRHIZAL_BASE_INTERVAL_SECONDS: 30,
+  // Base pulse 2x BPS: Worth waiting for, but not dominant.
+  MYCORRHIZAL_BASE_PULSE_MULTIPLIER: 2.0,
+  // Each Complexity point reduces interval by 2s: At 5 Complexity, pulse every 20s.
+  MYCORRHIZAL_COMPLEXITY_INTERVAL_REDUCTION: 2,
+  // Each Complexity point adds 20% to pulse: At 5 Complexity, 2.0 × 2.0 = 4x BPS pulse.
+  MYCORRHIZAL_COMPLEXITY_PULSE_BONUS: 0.20,
+
+  // --- Decomposition Loop (Saprophyte Signature) ---
+  // Base 15% conversion: Meaningful recovery without being the primary income.
+  DECOMPOSITION_BASE_CONVERSION_RATE: 0.15,
+  // Each Resilience point adds 3%: At 5 Resilience, 15% + 15% = 30% conversion.
+  DECOMPOSITION_RESILIENCE_BONUS_PER_POINT: 0.03,
 };
