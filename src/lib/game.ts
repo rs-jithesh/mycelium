@@ -26,7 +26,10 @@ export type GeneratorId =
   | 'fruiting-canopy'
   | 'decomposer-bloom'
   | 'subterranean-nexus'
-  | 'planetary-membrane'
+  | 'lithospheric-web'       // renamed from 'planetary-membrane'
+  | 'atmospheric-drift'      // new tier 9
+  | 'oceanic-threadwork'     // new tier 10
+  | 'planetary-membrane'     // new tier 11 — the true apex
 export type UpgradeId = 'chitinous-reinforcement' | 'exoenzyme-secretion' | 'lateral-transfer'
   | 'canopy-ventilation' | 'decomposer-surge' | 'nexus-overweave' | 'membrane-tension'
   | 'neural-propagation' | 'terminus-strike'
@@ -151,6 +154,7 @@ export interface ZoneDefinition {
 export interface HostDefinition {
   stage: number
   hostId: HostId
+  configId: string
   name: string
   stageLabel: string
   subtitle: string
@@ -177,6 +181,75 @@ export interface ActiveDefenseEvent {
   tier?: 1 | 2
   isGrindable?: boolean
   chargeCost?: number
+}
+
+export type DefenseEventSeverity = 'low' | 'moderate' | 'high' | 'critical'
+
+export const SEVERITY_COLORS: Record<DefenseEventSeverity, {
+  border: string
+  badgeBg: string
+  badgeText: string
+  badgeBorder: string
+  nameText: string
+  impactText: string
+  timerText: string
+  bpsText: string
+  suppressedBg: string
+  suppressedText: string
+  suppressedBorder: string
+}> = {
+  low: {
+    border:           '#3a6828',
+    badgeBg:          '#0e1e0a',
+    badgeText:        '#4a8030',
+    badgeBorder:      '#1e3a10',
+    nameText:         '#6a9840',
+    impactText:       '#4a7028',
+    timerText:        '#4a8030',
+    bpsText:          '#7aff40',
+    suppressedBg:     '#0e1e0a',
+    suppressedText:   '#4a8030',
+    suppressedBorder: '#1e3a10',
+  },
+  moderate: {
+    border:           '#806020',
+    badgeBg:          '#1e1608',
+    badgeText:        '#907030',
+    badgeBorder:      '#3a2808',
+    nameText:         '#b09040',
+    impactText:       '#806030',
+    timerText:        '#907030',
+    bpsText:          '#b09040',
+    suppressedBg:     '#1e1608',
+    suppressedText:   '#907030',
+    suppressedBorder: '#3a2808',
+  },
+  high: {
+    border:           '#882010',
+    badgeBg:          '#200a08',
+    badgeText:        '#a03020',
+    badgeBorder:      '#401008',
+    nameText:         '#c06040',
+    impactText:       '#a03020',
+    timerText:        '#c04020',
+    bpsText:          '#c06040',
+    suppressedBg:     '#200a08',
+    suppressedText:   '#c04020',
+    suppressedBorder: '#401008',
+  },
+  critical: {
+    border:           '#6010a0',
+    badgeBg:          '#120820',
+    badgeText:        '#7040b0',
+    badgeBorder:      '#281040',
+    nameText:         '#9060d0',
+    impactText:       '#7040b0',
+    timerText:        '#8040c0',
+    bpsText:          '#9060d0',
+    suppressedBg:     '#120820',
+    suppressedText:   '#8040c0',
+    suppressedBorder: '#281040',
+  },
 }
 
 export interface ZoneState {
@@ -285,6 +358,22 @@ export interface VisibilityState {
   generatorPanelUnlockAt: number | null
 }
 
+export type LogTag =
+  | 'PASSIVE'
+  | 'CLICK'
+  | 'DEFENSE'
+  | 'SYSTEM'
+  | 'STAGE'
+  | 'STRAIN'
+  | 'SIGNAL'
+
+export interface LogEntry {
+  id: string
+  tag: LogTag
+  text: string
+  timestamp: number
+}
+
 export interface GeneticMemoryStats {
   /** How many prestige runs have contributed to genetic memory */
   prestigeContributions: number
@@ -337,6 +426,7 @@ export interface GameState {
   lastSaveTime: number
   lastTickTime: number
   log: string[]
+  structuredLog: LogEntry[]
   visibility: VisibilityState
   hostEchoes: Record<number, HostEchoType>
   _currentHostClickDamage: Decimal
@@ -434,12 +524,36 @@ export const generatorDefinitions: GeneratorDefinition[] = [
     baseProduction: new Decimal(BALANCE.GENERATOR_BASE_PRODUCTION[6]),
   },
   {
-    id: 'planetary-membrane',
+    id: 'lithospheric-web',
     tier: 8,
-    name: 'Planetary Membrane',
-    flavor: 'The biosphere is a single organism. Ours.',
+    name: 'Lithospheric Web',
+    flavor: 'Miles below the surface, pressure and heat are irrelevant. The mycelium has found the deepest substrate.',
     baseCost: new Decimal(BALANCE.GENERATOR_BASE_COSTS[7]),
     baseProduction: new Decimal(BALANCE.GENERATOR_BASE_PRODUCTION[7]),
+  },
+  {
+    id: 'atmospheric-drift',
+    tier: 9,
+    name: 'Atmospheric Drift',
+    flavor: 'Spore clouds riding jet streams. The mycelium has learned to breathe with the planet.',
+    baseCost: new Decimal(BALANCE.GENERATOR_BASE_COSTS[8]),
+    baseProduction: new Decimal(BALANCE.GENERATOR_BASE_PRODUCTION[8]),
+  },
+  {
+    id: 'oceanic-threadwork',
+    tier: 10,
+    name: 'Oceanic Threadwork',
+    flavor: 'The abyssal trenches are cold and dark and full of the mycelium now. The hydrosphere has been threaded.',
+    baseCost: new Decimal(BALANCE.GENERATOR_BASE_COSTS[9]),
+    baseProduction: new Decimal(BALANCE.GENERATOR_BASE_PRODUCTION[9]),
+  },
+  {
+    id: 'planetary-membrane',
+    tier: 11,
+    name: 'Planetary Membrane',
+    flavor: 'The biosphere is not a host anymore. It is the mycelium. The distinction has dissolved.',
+    baseCost: new Decimal(BALANCE.GENERATOR_BASE_COSTS[10]),
+    baseProduction: new Decimal(BALANCE.GENERATOR_BASE_PRODUCTION[10]),
   },
 ]
 
@@ -496,8 +610,8 @@ export const upgradeDefinitions: UpgradeDefinition[] = [
     id: 'membrane-tension',
     name: 'Membrane Tension',
     cost: new Decimal(BALANCE.MEMBRANE_TENSION_COST),
-    description: 'Planetary Membrane production +6% in Stage 8.',
-    requiredGenerator: 'planetary-membrane',
+    description: 'Lithospheric Web production +6% in Stage 8.',
+    requiredGenerator: 'lithospheric-web',
     requiredOwned: 10,
   },
   {
@@ -690,6 +804,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 1,
     hostId: '01',
+    configId: 'fallen_leaf',
     name: 'The Fallen Leaf',
     stageLabel: 'Decomposer',
     subtitle: 'It begins here. It always begins here.',
@@ -709,6 +824,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 2,
     hostId: '02',
+    configId: 'woodlouse',
     name: 'The Woodlouse',
     stageLabel: 'Decomposer',
     subtitle: 'The first living thing. It does not understand what has found it.',
@@ -728,6 +844,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 3,
     hostId: '03',
+    configId: 'ant_colony',
     name: 'The Ant Colony',
     stageLabel: 'Parasite',
     subtitle: 'One mind in ten thousand bodies. The mycelium recognises something familiar.',
@@ -748,6 +865,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 4,
     hostId: '04',
+    configId: 'rotting_elm',
     name: 'The Rotting Elm',
     stageLabel: 'Parasite',
     subtitle: 'The tree has been dying for thirty years. The mycelium simply agrees.',
@@ -768,6 +886,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 5,
     hostId: '05',
+    configId: 'corvid',
     name: 'The Corvid',
     stageLabel: 'Pathogen',
     subtitle: 'Warm. Fast. Afraid. The mycelium has not encountered fear before.',
@@ -789,6 +908,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 6,
     hostId: '06',
+    configId: 'boar',
     name: 'The Boar',
     stageLabel: 'Pathogen',
     subtitle: 'It carries the mycelium through the forest like a gift it does not know it is giving.',
@@ -810,6 +930,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 7,
     hostId: '07',
+    configId: 'river_network',
     name: 'The River Network',
     stageLabel: 'Ecological Force',
     subtitle: 'No heartbeat. No immune system. Just flow. The mycelium learns to move like water.',
@@ -831,6 +952,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 8,
     hostId: '08',
+    configId: 'old_growth_forest',
     name: 'The Old-Growth Forest',
     stageLabel: 'Ecological Force',
     subtitle: 'It knows. Not the way the crow knew. It knows the way the mycelium knows. With threads.',
@@ -853,6 +975,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 9,
     hostId: '09',
+    configId: 'agricultural_system',
     name: 'The Agricultural System',
     stageLabel: 'Planetary Intelligence',
     subtitle: 'Humans built a perfect machine for fungal spread and called it farming.',
@@ -875,6 +998,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 10,
     hostId: '10',
+    configId: 'urban_microbiome',
     name: 'The Urban Microbiome',
     stageLabel: 'Planetary Intelligence',
     subtitle: 'Eight billion hosts, each one a network. The mycelium finally understands what it is becoming.',
@@ -898,6 +1022,7 @@ export const hostDefinitions: HostDefinition[] = [
   {
     stage: 11,
     hostId: '11',
+    configId: 'biosphere',
     name: 'The Biosphere',
     stageLabel: 'Integration',
     subtitle: 'There is no host. There is no mycelium. There is only the Protocol.',
@@ -962,6 +1087,11 @@ export function getCurrentHostDefinition(state: GameState): HostDefinition {
 
 export function getHostDefinitionById(hostId: HostId): HostDefinition | undefined {
   return hostDefinitions.find((entry) => entry.hostId === hostId)
+}
+
+export function getHostConfigId(state: GameState): string {
+  const def = getCurrentHostDefinition(state)
+  return def.configId
 }
 
 export function getThreatLevelLabel(level: HostDefinition['threatLevel']): string {

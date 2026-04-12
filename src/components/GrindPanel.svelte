@@ -71,7 +71,7 @@
   }
 </script>
 
-{#if state.currentStage >= 4}
+{#if false}
   <TerminalPanel
     title="ENZYME GRIND"
     tag="GRIND"

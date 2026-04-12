@@ -7,6 +7,9 @@
     | 'fruiting-canopy'
     | 'decomposer-bloom'
     | 'subterranean-nexus'
+    | 'lithospheric-web'
+    | 'atmospheric-drift'
+    | 'oceanic-threadwork'
     | 'planetary-membrane'
     | 'chitinous-reinforcement'
     | 'exoenzyme-secretion'
@@ -62,6 +65,27 @@
       'M12 8V18',
       'M16 11V17',
       'M6 13H18',
+    ],
+    'lithospheric-web': [
+      'M3 12C3 7 7 3 12 3C17 3 21 7 21 12',
+      'M3 12C3 17 7 21 12 21C17 21 21 17 21 12',
+      'M8 8L16 16',
+      'M16 8L8 16',
+      'M12 3V21',
+    ],
+    'atmospheric-drift': [
+      'M4 8C8 6 12 4 20 6',
+      'M2 12C8 10 12 8 22 10',
+      'M4 16C8 14 12 12 20 14',
+      'M6 6Q12 3 18 6',
+    ],
+    'oceanic-threadwork': [
+      'M3 10C6 8 9 6 12 5C15 4 18 6 21 10',
+      'M3 14C6 12 9 10 12 9C15 8 18 10 21 14',
+      'M8 5V19',
+      'M12 4V20',
+      'M16 5V19',
+      'M5 12H19',
     ],
     'planetary-membrane': [
       'M12 3C7 3 3 7.5 3 12C3 16.5 7 21 12 21C17 21 21 16.5 21 12C21 7.5 17 3 12 3Z',

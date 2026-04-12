@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import { BALANCE } from '../engine/balance.config'
-  import { countermeasureDefinitions } from '../lib/game'
+  import { countermeasureDefinitions, SEVERITY_COLORS } from '../lib/game'
   import type { ActiveDefenseEvent, DefenseEventId, GameState } from '../lib/game'
+  import { defenseToasts, dismissDefenseToast, type DefenseToastEntry } from '../stores/gameStore'
 
   export let state: GameState
 
@@ -146,6 +147,33 @@
     }, 4500)
   }
 
+  const TOAST_DURATION_MS = 5000
+
+  function startDrainTimer(toastId: string) {
+    const el = document.getElementById(`drain-fill-${toastId}`)
+    if (!el) return
+    const start = Date.now()
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - start
+      const pct = Math.max(0, 100 - (elapsed / TOAST_DURATION_MS * 100))
+      el.style.width = pct + '%'
+      if (elapsed >= TOAST_DURATION_MS) {
+        clearInterval(interval)
+        dismissDefenseToast(toastId)
+      }
+    }, 50)
+  }
+
+  let seenToastIds = new Set<string>()
+  $: {
+    for (const toast of $defenseToasts) {
+      if (!seenToastIds.has(toast.id)) {
+        seenToastIds.add(toast.id)
+        setTimeout(() => startDrainTimer(toast.id), 0)
+      }
+    }
+  }
+
   $: activeEvents = state.activeDefenseEvents
   $: visibleActiveEvents = activeEvents.filter((event) => !dismissedActiveToastKeys.has(getActiveEventKey(event)))
   $: activeEventKeys = activeEvents.map((event) => `${event.id}:${event.endsAt}`).join('|')
@@ -228,6 +256,44 @@
   })
 </script>
 
+<div class="toast-container">
+  {#each $defenseToasts as toast (toast.id)}
+    {@const c = toast.type === 'expire'
+      ? SEVERITY_COLORS['low']
+      : SEVERITY_COLORS[toast.severity]}
+    <div
+      class="toast"
+      style="border-left: 3px solid {c.border};"
+    >
+      <div class="toast-header">
+        <span class="toast-badge" style="
+          background: {c.badgeBg};
+          color: {c.badgeText};
+          border: 1px solid {c.badgeBorder};
+        ">
+          {toast.type === 'expire' ? 'EXPIRED' : toast.severity.toUpperCase()}
+        </span>
+        <span class="toast-name" style="color: {c.nameText};">
+          {toast.eventName.toUpperCase()}
+        </span>
+      </div>
+      <div class="toast-impact" style="color: {c.impactText};">
+        {toast.impactLine}
+      </div>
+      {#if toast.flavorText}
+        <div class="toast-flavor">{toast.flavorText}</div>
+      {/if}
+      <div class="toast-drain">
+        <div
+          id="drain-fill-{toast.id}"
+          class="toast-drain-fill"
+          style="width: 100%; background: {c.border};"
+        ></div>
+      </div>
+    </div>
+  {/each}
+</div>
+
 <div class="toast-region">
   {#if missedRollToast}
     <div class="toast toast--missed" role="status" aria-live="polite">
@@ -238,43 +304,6 @@
       <div class="toast-body">Host resistance did not materialize. The substrate remains unstable, but no active suppression has taken hold.</div>
     </div>
   {/if}
-
-  <!-- Active defense event toasts disabled -->
-  <!-- {#each visibleActiveEvents as event (`${event.id}-${event.endsAt}`)}
-    {@const eventKey = getActiveEventKey(event)}
-    <div
-      class="toast toast--active"
-      role="alert"
-      aria-live="assertive"
-      style="transform: {getSwipeTransform(eventKey)}; opacity: {getSwipeOpacity(eventKey)};"
-      on:touchstart={(e) => handleTouchStart(e, eventKey)}
-      on:touchmove={(e) => handleTouchMove(e, eventKey)}
-      on:touchend={() => handleTouchEnd(eventKey, event)}
-    >
-      <div class="toast-header">
-        <span class="toast-tag toast-tag--danger">!! DEFENSE EVENT</span>
-        <div class="toast-header__actions">
-          <span class="toast-timer">{formatCountdown(getRemainingSeconds(event))}</span>
-          <button
-            class="toast-dismiss"
-            type="button"
-            aria-label={`Dismiss ${event.name}`}
-            on:click={() => dismissActiveToast(event)}
-          >
-            X
-          </button>
-        </div>
-      </div>
-      <div class="toast-title">{event.name}</div>
-      <div class="toast-body">{event.description}</div>
-      {#if getPenaltyLabel(event)}
-        <div class="toast-penalty">{getPenaltyLabel(event)}</div>
-      {/if}
-      {#if showClickHint(event)}
-        <div class="toast-hint">+ Hyphal absorption taxed — increase manual input</div>
-      {/if}
-    </div>
-  {/each} -->
 
   {#if forecastVisible}
     <div
@@ -311,6 +340,83 @@
 </div>
 
 <style>
+  .toast-container {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 360px;
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .toast {
+    background: #0c0f09;
+    padding: 10px 14px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    position: relative;
+    animation: slideIn 0.25s ease forwards;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(10px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .toast-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .toast-badge {
+    font-family: 'Courier New', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    padding: 1px 6px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .toast-name {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+  }
+
+  .toast-impact {
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+  }
+
+  .toast-flavor {
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    letter-spacing: 0.03em;
+    color: #3a5228;
+    line-height: 1.5;
+    font-style: italic;
+  }
+
+  .toast-drain {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: #1a2010;
+  }
+
+  .toast-drain-fill {
+    height: 100%;
+    transition: width 0.05s linear;
+  }
+
   .toast-region {
     position: fixed;
     bottom: 5.5rem;
@@ -335,11 +441,6 @@
     touch-action: pan-y;
     user-select: none;
     will-change: transform, opacity;
-  }
-
-  .toast--active {
-    border: 1px solid #c0392b;
-    background: rgba(10, 0, 0, 0.92);
   }
 
   .toast--forecast {
@@ -373,10 +474,6 @@
     font-weight: 500;
   }
 
-  .toast-tag--danger {
-    color: #c0392b;
-  }
-
   .toast-tag--forecast {
     color: #2a7a4a;
   }
@@ -405,19 +502,6 @@
     white-space: pre-line;
   }
 
-  .toast-penalty {
-    font-size: 12px;
-    color: #c0392b;
-    white-space: pre-line;
-    margin-top: 2px;
-  }
-
-  .toast-hint {
-    font-size: 12px;
-    color: #2a7a4a;
-    margin-top: 2px;
-  }
-
   .toast-dismiss {
     background: none;
     border: none;
@@ -435,18 +519,27 @@
   }
 
   @media (min-width: 768px) {
+    .toast-container {
+      bottom: 20px;
+      right: 20px;
+    }
     .toast-region {
       bottom: 1rem;
     }
   }
 
   @media (max-width: 767px) {
+    .toast-container {
+      bottom: 16px;
+      left: 16px;
+      right: 16px;
+      width: auto;
+    }
     .toast-region {
       width: calc(100vw - 1rem);
       left: 0.5rem;
       transform: none;
     }
-
     .toast {
       padding: 12px 14px;
     }

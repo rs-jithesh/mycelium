@@ -5,7 +5,7 @@
  */
 
 import { writable } from 'svelte/store'
-import type { BuyAmount, CountermeasureId, GeneratorId, OfflineNarrative, UpgradeId, StatId, StrainId, SkillId } from '../lib/game'
+import type { BuyAmount, CountermeasureId, GeneratorId, OfflineNarrative, UpgradeId, StatId, StrainId, SkillId, DefenseEventSeverity } from '../lib/game'
 import {
   tick as engineTick,
   absorb as engineAbsorb,
@@ -53,6 +53,36 @@ declare global {
 }
 
 export const _pendingOfflineNarrative = writable<OfflineNarrative | null>(null)
+
+export type DefenseToastType = 'start' | 'expire'
+
+export interface DefenseToastEntry {
+  id: string
+  type: DefenseToastType
+  eventName: string
+  severity: DefenseEventSeverity
+  impactLine: string
+  flavorText: string
+  createdAt: number
+}
+
+export const defenseToasts = writable<DefenseToastEntry[]>([])
+
+export function pushDefenseToast(entry: Omit<DefenseToastEntry, 'id' | 'createdAt'>) {
+  const toast: DefenseToastEntry = {
+    ...entry,
+    id: `toast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    createdAt: Date.now(),
+  }
+  defenseToasts.update(q => {
+    const trimmed = q.length >= 3 ? q.slice(1) : q
+    return [...trimmed, toast]
+  })
+}
+
+export function dismissDefenseToast(id: string) {
+  defenseToasts.update(q => q.filter(t => t.id !== id))
+}
 
 let timeScale = 1.0
 let lastTickTime = Date.now()

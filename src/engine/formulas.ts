@@ -6,7 +6,7 @@
 
 import Decimal from 'break_eternity.js'
 import { BALANCE } from './balance.config'
-import type { DefenseEventId, GameState, GeneratorId, UpgradeId, SkillId, StrainId, StatId, IntegrationZoneState } from '../lib/game'
+import type { DefenseEventId, GameState, GeneratorId, UpgradeId, SkillId, StrainId, StatId, IntegrationZoneState, DefenseEventSeverity } from '../lib/game'
 import {
   generatorDefinitions,
   upgradeDefinitions,
@@ -42,6 +42,57 @@ function getSkillDef(skillId: SkillId) {
   const def = skillDefinitions.find((d) => d.id === skillId)
   if (!def) throw new Error(`Unknown skill: ${skillId}`)
   return def
+}
+
+// Generator tier ordering for substrate chain calculations
+export const GENERATOR_TIER_ORDER: GeneratorId[] = [
+  'hyphae-strand',
+  'mycelial-mat',
+  'rhizomorph-cord',
+  'sporocarp-cluster',
+  'fruiting-canopy',
+  'decomposer-bloom',
+  'subterranean-nexus',
+  'lithospheric-web',
+  'atmospheric-drift',
+  'oceanic-threadwork',
+  'planetary-membrane',
+]
+
+export function getSubstrateRawEfficiency(tierIndex: number, counts: number[]): number {
+  if (tierIndex === 0) return 1.0
+  const ownedThisTier = counts[tierIndex]
+  if (ownedThisTier === 0) return 1.0
+  const ownedBelow = counts[tierIndex - 1]
+  const ratio = BALANCE.SUBSTRATE.RATIOS[tierIndex]
+  const required = ownedThisTier * ratio
+  return Math.min(1, ownedBelow / required)
+}
+
+export function computeSubstrateEfficiencies(counts: number[]): number[] {
+  const efficiencies: number[] = new Array(counts.length).fill(1.0)
+  for (let i = 0; i < counts.length; i++) {
+    const raw = getSubstrateRawEfficiency(i, counts)
+    const cascadeBelow = i === 0 ? 1.0 : efficiencies[i - 1]
+    efficiencies[i] = raw * cascadeBelow
+  }
+  return efficiencies
+}
+
+export function applySubstrateFloor(cascadeEfficiency: number): number {
+  const floor = BALANCE.SUBSTRATE.FLOOR
+  return floor + (1 - floor) * cascadeEfficiency
+}
+
+export function getSubstrateStatus(rawEfficiency: number): 'sufficient' | 'strained' | 'depleted' {
+  if (rawEfficiency >= 0.9) return 'sufficient'
+  if (rawEfficiency >= 0.5) return 'strained'
+  return 'depleted'
+}
+
+export function getSubstrateEfficiencyPercent(tierIndex: number, counts: number[]): number {
+  const efficiencies = computeSubstrateEfficiencies(counts)
+  return Math.round(applySubstrateFloor(efficiencies[tierIndex]) * 100)
 }
 
 // --- STRAIN-STAT SYNERGY SYSTEM ---
@@ -438,6 +489,13 @@ export function getClickDefenseMultiplier(state: GameState): Decimal {
   }, new Decimal(1))
 }
 
+export function getDefenseEventSeverity(multiplier: number): DefenseEventSeverity {
+  if (multiplier >= 0.90) return 'low'
+  if (multiplier >= 0.75) return 'moderate'
+  if (multiplier >= 0.50) return 'high'
+  return 'critical'
+}
+
 // --- PRODUCTION FORMULAS ---
 
 export function getUpgradeEffectivenessMultiplier(state: GameState): Decimal {
@@ -809,8 +867,17 @@ export function getGeneratorProductionPerBuy(_state: GameState, generatorId: Gen
 }
 
 export function calculateBiomassPerSecond(state: GameState): Decimal {
+  const counts = GENERATOR_TIER_ORDER.map(id => state.generators[id]?.owned ?? 0)
+  const substrateEfficiencies = computeSubstrateEfficiencies(counts)
+
   const total = generatorDefinitions.reduce(
-    (total, definition) => total.add(getGeneratorProduction(state, definition.id)),
+    (total, definition) => {
+      const tierIndex = GENERATOR_TIER_ORDER.indexOf(definition.id)
+      const substrateEff = tierIndex >= 0
+        ? applySubstrateFloor(substrateEfficiencies[tierIndex])
+        : 1.0
+      return total.add(getGeneratorProduction(state, definition.id).mul(substrateEff))
+    },
     new Decimal(0)
   )
 
@@ -1006,6 +1073,13 @@ export function formatDecimal(value: Decimal): string {
   }
 
   return value.toExponential(2)
+}
+
+export function formatSkillCost(value: Decimal): string {
+  const n = value.toNumber()
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M Ψ`
+  if (n >= 1e4) return `${Math.round(n / 1e3)}K Ψ`
+  return n.toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' Ψ'
 }
 
 export function formatDuration(ms: number): string {

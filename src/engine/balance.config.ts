@@ -91,26 +91,29 @@ export const BALANCE = {
   GENERATOR_COST_EXPONENT: 1.28,
 
   // Generator base costs (index 0 = Tier 1: Hyphae Strand)
+  // Index 7 = Lithospheric Web, index 8 = Atmospheric Drift, index 9 = Oceanic Threadwork, index 10 = Planetary Membrane
   GENERATOR_BASE_COSTS: [
     6, 50, 400, 4_000,
     30_000, 250_000, 2_000_000, 15_000_000,
+    120_000_000, 1_000_000_000, 9_000_000_000,
   ],
 
   // Generator base production per second (index 0 = Tier 1)
   GENERATOR_BASE_PRODUCTION: [
     0.008, 0.04, 0.2, 1,
     5, 25, 120, 600,
+    3_000, 15_000, 80_000,
   ],
 
   // Previous-tier ownership needed to reveal the next generator tier
-  GENERATOR_UNLOCK_THRESHOLDS: [0, 6, 6, 6, 8, 7, 6, 5],
+  GENERATOR_UNLOCK_THRESHOLDS: [0, 6, 6, 6, 8, 7, 6, 5, 4, 4, 3],
 
   // Tier 4 unlocks when Stage 2 host progress >= this value (0–100 scale)
   TIER4_STAGE2_HOST_PROGRESS_GATE: 0,
 
   // Stage gate: minimum stage that must be active before this tier is visible
-  // (0 = no stage gate)
-  GENERATOR_STAGE_GATES: [0, 0, 1, 2, 2, 3, 4, 5],
+  // (0 = no stage gate). Tier 9 unlocks at Stage 7, tier 10 at Stage 9, tier 11 at Stage 11.
+  GENERATOR_STAGE_GATES: [0, 0, 1, 2, 2, 3, 4, 5, 7, 9, 11],
 
   // Genetic Memory prestige threshold (minimum lifetime biomass to earn any Gamma)
   GENETIC_MEMORY_DIVISOR: 5e11,
@@ -662,10 +665,12 @@ export const BALANCE = {
   CLICK_HOST_HEALTH_FRACTION_DEFAULT: [
     0.004, 0.001, 0.0005, 0.0005,
     0.0003, 0.0002, 0.0001, 0.00005,
+    0.00003, 0.00002, 0.00001,
   ],
   CLICK_HOST_HEALTH_FRACTION_PARASITE: [
     0.006, 0.0015, 0.00075, 0.00075,
     0.00045, 0.0003, 0.00015, 0.000075,
+    0.000045, 0.00003, 0.000015,
   ],
 
   // BPS fraction used as base click value, differentiated by strain.
@@ -796,5 +801,20 @@ export const BALANCE = {
     displayDurationSeconds: 4,
     queueMaxSize: 3,
     showOnlyFirstRun: false,
+  },
+
+  // ─────────────────────────────────────────────
+  // SUBSTRATE DEPENDENCY CHAIN
+  // Each generator tier's BPS is scaled by whether
+  // the tier below it is sufficiently stocked.
+  // Index 0 = tier 1 (no dependency).
+  // ─────────────────────────────────────────────
+  SUBSTRATE: {
+    // How many of tier (n-1) are needed per unit of tier n for full efficiency.
+    // Index 0 is unused (tier 1 has no dependency).
+    RATIOS: [0, 4, 3, 3, 2, 2, 2, 2, 1.5, 1.5, 1],
+    // Minimum output fraction when substrate is fully depleted (0.0–1.0).
+    // At 0.20, a tier with zero substrate still outputs 20% of its base BPS.
+    FLOOR: 0.20,
   },
 };

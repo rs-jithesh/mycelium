@@ -6,10 +6,11 @@
   import TypewriterLog from './lib/ui/TypewriterLog.svelte'
   import SignalPanel from './lib/SignalPanel.svelte'
   import DefenseToast from './components/DefenseToast.svelte'
-  import HostVisual from './components/HostVisual.svelte'
+  import HostBackground from './components/HostBackground.svelte'
   import GrindPanel from './components/GrindPanel.svelte'
+  import ObservationFeed from './components/ObservationFeed.svelte'
   import { wikiEntries, wikiSections } from './lib/wiki'
-  import { game, _pendingOfflineNarrative } from './stores/gameStore'
+  import { game, _pendingOfflineNarrative, defenseToasts } from './stores/gameStore'
   import {
     canReleaseSpores,
     getGeneticMemoryBonusPercent,
@@ -30,6 +31,12 @@
     getClicksUntilBurst,
     getStrainSynergyLabel,
     getEffectiveStatBonus,
+    formatSkillCost,
+    GENERATOR_TIER_ORDER,
+    getSubstrateRawEfficiency,
+    getSubstrateStatus,
+    getSubstrateEfficiencyPercent,
+    getDefenseEventSeverity,
   } from './engine/formulas'
   import { BALANCE } from './engine/balance.config'
   import { defenseFlavorDefinitions } from './engine/happenings'
@@ -41,8 +48,10 @@
     skillDefinitions,
     strainDefinitions,
     upgradeDefinitions,
+    getHostConfigId,
   } from './lib/game'
-  import type { ActiveDefenseEvent, CountermeasureId, DefenseEventId, GeneratorId, HostEchoDefinition, OfflineEvent, OfflineNarrative } from './lib/game'
+  import type { ActiveDefenseEvent, CountermeasureId, DefenseEventId, DefenseEventSeverity, GeneratorId, HostEchoDefinition, OfflineEvent, OfflineNarrative } from './lib/game'
+  import { SEVERITY_COLORS } from './lib/game'
   import { formatBiomass, formatBPS } from './utils/formatNumber'
 
   type ViewId = 'terminal' | 'evolution' | 'spore' | 'wiki'
@@ -84,8 +93,20 @@
   let isConfirmingSporeRelease = false
   let generatorHoldDelayTimer: number | undefined
   let generatorHoldIntervalTimer: number | undefined
-  let absorbProgress = 0
-  let absorbIntervalTimer: number | undefined
+  let biomassPulse = false
+  let biomassPulseTimer: ReturnType<typeof setTimeout> | undefined
+  let bgGlitching = false
+  let lastBgGlitchCount = 0
+  let bpsLiftFlash = false
+  let panelAlertFlash = false
+  let bpsPurchaseFlash = false
+  let purchaseFlashMap = new Map<GeneratorId, boolean>()
+  let countPulseMap = new Map<GeneratorId, boolean>()
+  let buyBtnAcquiredMap = new Map<GeneratorId, boolean>()
+  let canAffordFlashMap = new Map<GeneratorId, boolean>()
+  let outputTickMap = new Map<GeneratorId, boolean>()
+  let previousAffordableMap = new Map<GeneratorId, boolean>()
+  let previousEventCount = 0
   let uiNow = Date.now()
   let uiClockTimer: number | undefined
   let forecastCountdownLabel: string | null = null
@@ -174,36 +195,103 @@
     }
   }
 
-  function clearAbsorbProgress() {
-    if (absorbIntervalTimer) {
-      window.clearInterval(absorbIntervalTimer)
-      absorbIntervalTimer = undefined
+  function triggerBpsPurchaseFlash() {
+    bpsPurchaseFlash = true
+    setTimeout(() => { bpsPurchaseFlash = false }, 200)
+  }
+
+  function triggerCardPurchaseFlash(generatorId: GeneratorId) {
+    purchaseFlashMap.set(generatorId, true)
+    purchaseFlashMap = purchaseFlashMap
+    setTimeout(() => {
+      purchaseFlashMap.set(generatorId, false)
+      purchaseFlashMap = purchaseFlashMap
+    }, 300)
+  }
+
+  function triggerCountPulse(generatorId: GeneratorId) {
+    countPulseMap.set(generatorId, true)
+    countPulseMap = countPulseMap
+    setTimeout(() => {
+      countPulseMap.set(generatorId, false)
+      countPulseMap = countPulseMap
+    }, 200)
+  }
+
+  function triggerBuyBtnAcquired(generatorId: GeneratorId) {
+    buyBtnAcquiredMap.set(generatorId, true)
+    buyBtnAcquiredMap = buyBtnAcquiredMap
+    setTimeout(() => {
+      buyBtnAcquiredMap.set(generatorId, false)
+      buyBtnAcquiredMap = buyBtnAcquiredMap
+    }, 400)
+  }
+
+  function triggerCanAffordFlash(generatorId: GeneratorId) {
+    canAffordFlashMap.set(generatorId, true)
+    canAffordFlashMap = canAffordFlashMap
+    setTimeout(() => {
+      canAffordFlashMap.set(generatorId, false)
+      canAffordFlashMap = canAffordFlashMap
+    }, 600)
+  }
+
+  let audioCtx: AudioContext | null = null
+
+  function playThud() {
+    try {
+      if (!audioCtx) {
+        audioCtx = new AudioContext()
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume()
+      }
+      const ctx = audioCtx
+      const now = ctx.currentTime
+
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      const filter = ctx.createBiquadFilter()
+
+      filter.type = 'lowpass'
+      filter.frequency.setValueAtTime(150, now)
+      filter.frequency.exponentialRampToValueAtTime(40, now + 0.1)
+
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(80, now)
+      osc.frequency.exponentialRampToValueAtTime(30, now + 0.08)
+
+      gain.gain.setValueAtTime(0.3, now)
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15)
+
+      osc.connect(filter)
+      filter.connect(gain)
+      gain.connect(ctx.destination)
+
+      osc.start(now)
+      osc.stop(now + 0.15)
+    } catch {
+      // audio not supported
     }
   }
 
   function absorbWithProgress() {
-    if (absorbIntervalTimer) {
-      return
+    playThud()
+
+    bgGlitching = true
+    setTimeout(() => { bgGlitching = false }, 300)
+
+    const clickValue = $game.biomassPerClick
+    const threshold = $game.biomassPerSecond.mul(5)
+    if (clickValue.gt(threshold)) {
+      biomassPulse = true
+      clearTimeout(biomassPulseTimer)
+      biomassPulseTimer = setTimeout(() => {
+        biomassPulse = false
+      }, 150)
     }
 
-    absorbProgress = 0
     game.absorb()
-
-    const progressDuration = 1000
-    const updateInterval = 16
-    const steps = progressDuration / updateInterval
-    const progressIncrement = 100 / steps
-    let currentStep = 0
-
-    absorbIntervalTimer = window.setInterval(() => {
-      currentStep += 1
-      absorbProgress = Math.min(100, currentStep * progressIncrement)
-
-      if (currentStep >= steps) {
-        clearAbsorbProgress()
-        absorbProgress = 0
-      }
-    }, updateInterval)
   }
 
   function getGeneratorBuyGain(generatorId: GeneratorId): string {
@@ -361,13 +449,34 @@
   $: suppressionLabel = (() => {
     const hasMult = $game.activeDefenseEvents.some((e) => e.multiplier.lt(1))
     const disrupted = $game.activeDefenseEvents.find((e) => e.disabledGeneratorId != null)
-    if (hasMult && disrupted) return `[SUPPRESSED -${suppressionPct}% / ${disrupted.disabledGeneratorId} SEVERED]`
-    if (hasMult) return `[SUPPRESSED -${suppressionPct}%]`
+    if (hasMult && disrupted) return `[⚇ -${suppressionPct}% SUPPRESSED / ${disrupted.disabledGeneratorId} SEVERED]`
+    if (hasMult) return `[⚇ -${suppressionPct}% SUPPRESSED]`
     if (disrupted) return `[${disrupted.disabledGeneratorId?.replace(/-/g, ' ').toUpperCase()} SEVERED]`
     return ''
   })()
+  $: {
+    const currentCount = $game.activeDefenseEvents.length
+    if (previousEventCount > 0 && currentCount < previousEventCount && !bpsLiftFlash) {
+      bpsLiftFlash = true
+      setTimeout(() => {
+        bpsLiftFlash = false
+      }, 500)
+    }
+    if (currentCount > previousEventCount && !panelAlertFlash) {
+      panelAlertFlash = true
+      setTimeout(() => {
+        panelAlertFlash = false
+      }, 400)
+    }
+    previousEventCount = currentCount
+  }
   $: hostProgressPercent = getHostProgress($game)
   $: hostProgressLabel = formatHostProgress(hostProgressPercent)
+  $: currentHostDef = getCurrentHostDefinition($game)
+  $: currentHostFlavor = currentHostDef.flavor
+  $: degradationRate = $game.hostMaxHealth.gt(0)
+    ? Number($game.biomassPerSecond.div($game.hostMaxHealth).mul(100).toFixed(2))
+    : 0
   $: latestLogEntry = getLatestVisibleEvent($game.log)
   $: if (activeView !== 'wiki' && !isNavVisible(activeView)) {
     activeView = 'terminal'
@@ -391,6 +500,19 @@
     ])
   )
 
+  $: {
+    for (const generator of generatorDefinitions) {
+      const id = generator.id
+      const currentlyAffordable = canAffordGenerator.get(id) ?? false
+      const wasAffordable = previousAffordableMap.get(id) ?? false
+      if (currentlyAffordable && !wasAffordable && wasAffordable !== undefined) {
+        triggerCanAffordFlash(id)
+      }
+      previousAffordableMap.set(id, currentlyAffordable)
+    }
+    previousAffordableMap = previousAffordableMap
+  }
+
   function startGeneratorBuyHold(generatorId: (typeof generatorDefinitions)[number]['id'], event: PointerEvent) {
     if (event.button !== 0 || !canAffordGenerator.get(generatorId)) {
       return
@@ -398,6 +520,10 @@
 
     clearGeneratorBuyHold()
     game.buyGenerator(generatorId)
+    triggerBpsPurchaseFlash()
+    triggerCardPurchaseFlash(generatorId)
+    triggerCountPulse(generatorId)
+    triggerBuyBtnAcquired(generatorId)
     generatorHoldDelayTimer = window.setTimeout(() => {
       generatorHoldIntervalTimer = window.setInterval(() => {
         if (!canAffordGenerator.get(generatorId)) {
@@ -423,7 +549,7 @@
       return 'LOCKED'
     }
 
-    return `${formatDecimal(skill.cost)} Ψ`
+    return formatSkillCost(skill.cost)
   }
 
   function getSkillRequirementText(skill: (typeof skillDefinitions)[number]): string {
@@ -431,25 +557,42 @@
       return 'Mutation integrated into the colony.'
     }
 
-    const missing: string[] = []
+    const stageLock = $game.currentStage < 3
+    const statLock = $game.stats[skill.branch] < skill.requiredStat
+    const costLock = $game.biomass.lt(skill.cost)
 
-    if ($game.currentStage < 3) {
-      missing.push('STAGE 3')
+    if (stageLock || statLock) {
+      const missing: string[] = []
+      if (stageLock) missing.push('STAGE 3')
+      if (statLock) missing.push(`${skill.branch[0].toUpperCase()}:${skill.requiredStat} (${skill.branch.toUpperCase()})`)
+      return `Requires ${missing.join(' · ')}`
     }
 
-    if ($game.stats[skill.branch] < skill.requiredStat) {
-      missing.push(`${skill.branch[0].toUpperCase()}:${skill.requiredStat}`)
-    }
-
-    if ($game.biomass.lt(skill.cost)) {
-      missing.push(`${formatDecimal(skill.cost)} Ψ`)
-    }
-
-    if (missing.length > 0) {
-      return missing.join(' / ')
+    if (costLock) {
+      return `Need ${formatSkillCost(skill.cost)} (have ${formatSkillCost($game.biomass)})`
     }
 
     return 'Ready to integrate.'
+  }
+
+  function isWithinReach(skill: (typeof skillDefinitions)[number]): boolean {
+    if (hasSkill(skill.id)) return false
+    if ($game.currentStage < 3) return false
+    const currentRank = $game.stats[skill.branch]
+    const neededRank = skill.requiredStat
+    if (currentRank >= neededRank) return false
+    if (currentRank < neededRank - 1) return false
+    return $game.biomass.times(2).gte(skill.cost)
+  }
+
+  function getSkillBadgeText(skill: (typeof skillDefinitions)[number]): string {
+    if (hasSkill(skill.id)) {
+      return 'INTEGRATED'
+    }
+    if ($game.currentStage < 3 || $game.stats[skill.branch] < skill.requiredStat) {
+      return 'LOCKED'
+    }
+    return `[ PURCHASE · ${formatSkillCost(skill.cost)} ]`
   }
 
   function formatHostProgress(progress: number) {
@@ -622,17 +765,53 @@
     return 'LOW'
   }
 
-  function getEventPenaltyBreakdown(event: ActiveDefenseEvent): string[] {
-    const penalties: string[] = []
+  function getSeverityRank(severity: EventSeverity): number {
+    switch (severity) {
+      case 'CRITICAL': return 4
+      case 'SEVERE': return 3
+      case 'MODERATE': return 2
+      case 'LOW': return 1
+    }
+  }
+
+  function getEventPenaltyBreakdown(event: ActiveDefenseEvent): Array<{ label: string; percent: number; absoluteBps?: string; absoluteClicks?: string }> {
+    const penalties: Array<{ label: string; percent: number; absoluteBps?: string; absoluteClicks?: string }> = []
     if (event.multiplier.lt(1)) {
       const pct = Math.round((1 - event.multiplier.toNumber()) * 100)
-      penalties.push(`-${pct}% passive production`)
+      const currentBps = $game.biomassPerSecond.toNumber()
+      const absoluteBpsLoss = currentBps * (1 - event.multiplier.toNumber())
+      penalties.push({
+        label: `-${pct}% passive production`,
+        percent: pct,
+        absoluteBps: `(-${absoluteBpsLoss.toFixed(2)} BPS currently)`
+      })
     }
     if (event.clickMultiplier && event.clickMultiplier.lt(1)) {
       const pct = Math.round((1 - event.clickMultiplier.toNumber()) * 100)
-      penalties.push(`-${pct}% click absorption`)
+      const currentClick = $game.biomassPerClick.toNumber()
+      const absoluteClickLoss = currentClick * (1 - event.clickMultiplier.toNumber())
+      penalties.push({
+        label: `-${pct}% click absorption`,
+        percent: pct,
+        absoluteClicks: `(-${absoluteClickLoss.toFixed(2)} \u03A8 per click currently)`
+      })
     }
     return penalties
+  }
+
+  function getCountdownState(remainingMs: number): 'safe' | 'warning' | 'danger' {
+    const remainingSecs = remainingMs / 1000
+    if (remainingSecs < 30) return 'danger'
+    if (remainingSecs < 60) return 'warning'
+    return 'safe'
+  }
+
+  function getEventDurationMs(event: ActiveDefenseEvent): number {
+    return event.endsAt - Date.now() + (Date.now() - uiNow)
+  }
+
+  function getRemainingDurationMs(endsAt: number): number {
+    return Math.max(0, endsAt - uiNow)
   }
 
   function getEventFlavorHint(event: ActiveDefenseEvent): string | null {
@@ -652,9 +831,63 @@
     return hash
   }
 
-  function getEquippedCountermeasure() {
-    return countermeasureDefinitions.find((entry: (typeof countermeasureDefinitions)[number]) => entry.id === $game.equippedCountermeasure) ?? null
+  function getMinRemainingMs(events: ActiveDefenseEvent[], now: number): number {
+    return Math.min(...events.map(e => Math.max(0, e.endsAt - now)))
   }
+
+  function formatTimer(ms: number): string {
+    const totalSeconds = Math.ceil(ms / 1000)
+    const m = Math.floor(totalSeconds / 60)
+    const s = totalSeconds % 60
+    return `${m}:${s.toString().padStart(2, '0')}`
+  }
+
+  let now = Date.now()
+  let timerInterval: ReturnType<typeof setInterval>
+
+  onMount(() => {
+    timerInterval = setInterval(() => { now = Date.now() }, 1000)
+  })
+
+  onDestroy(() => {
+    clearInterval(timerInterval)
+  })
+
+  $: activeDefenseEvents = $game.activeDefenseEvents
+
+  $: mostSevereSeverity = (() => {
+    if (activeDefenseEvents.length === 0) return null
+    let mostSevere: DefenseEventSeverity = 'low'
+    let highestRank = 0
+    for (const event of activeDefenseEvents) {
+      const sev = getDefenseEventSeverity(event.multiplier.toNumber())
+      const rank = sev === 'critical' ? 4 : sev === 'high' ? 3 : sev === 'moderate' ? 2 : 1
+      if (rank > highestRank) {
+        highestRank = rank
+        mostSevere = sev
+      }
+    }
+    return mostSevere
+  })()
+
+  $: minRemainingMs = activeDefenseEvents.length > 0
+    ? getMinRemainingMs(activeDefenseEvents, now)
+    : 0
+
+  $: formattedTimer = minRemainingMs > 0 ? formatTimer(minRemainingMs) : ''
+
+  $: suppressionBadges = activeDefenseEvents.map(event => {
+    const sev = getDefenseEventSeverity(event.multiplier.toNumber())
+    const pct = Math.round((1 - event.multiplier.toNumber()) * 100)
+    return {
+      eventName: event.name,
+      sev,
+      pct,
+      colors: SEVERITY_COLORS[sev],
+    }
+  })
+
+  $: equippedCountermeasure = countermeasureDefinitions.find((entry: (typeof countermeasureDefinitions)[number]) => entry.id === $game.equippedCountermeasure) ?? null
 
   function getCountermeasureCoverage(countermeasureId: CountermeasureId): string {
     const definition = countermeasureDefinitions.find((entry: (typeof countermeasureDefinitions)[number]) => entry.id === countermeasureId)
@@ -816,9 +1049,23 @@
       uiNow = Date.now()
     }, 1000)
 
+    const TICK_INTERVAL = 5000
+    generatorDefinitions.forEach((generator, index) => {
+      const offset = (index * 800) % TICK_INTERVAL
+      const timerId = window.setInterval(() => {
+        if ($game.visibility.generatorTiers[index]) {
+          outputTickMap.set(generator.id, true)
+          outputTickMap = outputTickMap
+          setTimeout(() => {
+            outputTickMap.set(generator.id, false)
+            outputTickMap = outputTickMap
+          }, 150)
+        }
+      }, TICK_INTERVAL + offset)
+    })
+
     return () => {
       clearGeneratorBuyHold()
-      clearAbsorbProgress()
       if (uiClockTimer) {
         window.clearInterval(uiClockTimer)
         uiClockTimer = undefined
@@ -852,7 +1099,7 @@
       </div>
 
       {#if $game.visibility.biomassDisplay}
-        <div class="intro-biomass reveal-enter" class:intro-biomass--expanded={!$game.visibility.observationLog}>
+        <div class="intro-biomass reveal-enter" class:intro-biomass--expanded={!$game.visibility.observationLog} on:click={() => absorbWithProgress()}>
           <p>BIOMASS</p>
           <h2>{formatBiomass($game.biomass, useScientificNotation)} <span>Ψ</span></h2>
           {#if $game.visibility.bpsDisplay}
@@ -861,24 +1108,13 @@
         </div>
       {/if}
 
-      <div class="intro-shell__action reveal-enter">
-        <TerminalButton
-          disabled={absorbProgress > 0}
-          on:click={() => absorbWithProgress()}
-          active={!$game.visibility.observationLog}
-          progress={absorbProgress}
-        >
-          INITIATE ABSORPTION
-        </TerminalButton>
-
-        {#if $game.strain === 'parasite'}
-          {@const clicksUntilBurst = getClicksUntilBurst($game.clickCount, $game.stats.virulence)}
-          <div class="burst-counter">
-            <span class="burst-counter__icon">⚡</span>
-            <span class="burst-counter__text">Burst in {clicksUntilBurst} click{clicksUntilBurst === 1 ? '' : 's'}</span>
-          </div>
-        {/if}
-      </div>
+      {#if $game.strain === 'parasite'}
+        {@const clicksUntilBurst = getClicksUntilBurst($game.clickCount, $game.stats.virulence)}
+        <div class="burst-counter">
+          <span class="burst-counter__icon">⚡</span>
+          <span class="burst-counter__text">Burst in {clicksUntilBurst} click{clicksUntilBurst === 1 ? '' : 's'}</span>
+        </div>
+      {/if}
 
       {#if latestLogEntry}
         <section class="intro-latest-event reveal-enter" class:reveal-enter={isNewReveal('observationLog')} on:animationend={() => finishReveal('observationLog')}>
@@ -900,6 +1136,9 @@
         <button class:nav-link={true} class:nav-link--active={activeView === item.id} type="button" on:click={() => (activeView = item.id)}>
           <span>{item.symbol}</span>
           <span>{item.label}</span>
+          {#if item.id === 'evolution' && $game.mutationPoints > 0}
+            <span class="mutation-dot" title="Mutation points available to spend."></span>
+          {/if}
         </button>
       {/each}
     </nav>
@@ -921,19 +1160,45 @@
 
       <div class="system-bar__status">
         {#if $game.visibility.biomassDisplay && activeView !== 'terminal'}
-          <span>BIOMASS: {formatBiomass($game.biomass, useScientificNotation)} Ψ</span>
+          <div class="system-bar__segment" title="Your total accumulated biomass.">
+            <span class="system-bar__segment-label">BIOMASS</span>
+            <span class="system-bar__segment-value">{formatBiomass($game.biomass, useScientificNotation)} Ψ</span>
+          </div>
         {/if}
         {#if $game.visibility.bpsDisplay}
-          <span>
-            BPS:
-            <span class:bps-suppressed={suppressionActive}>+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
-            {#if suppressionActive}
-              <span class="bps-suppression-tag">{suppressionLabel}</span>
+          <div class="system-bar__segment" title="Passive biomass per second.">
+            <span class="system-bar__segment-label">BPS</span>
+            <span
+              class="system-bar__segment-value"
+              class:bps-suppressed={suppressionActive}
+              class:bps-lift-flash={bpsLiftFlash}
+              class:bps-purchase-flash={bpsPurchaseFlash}
+              style={mostSevereSeverity && activeDefenseEvents.length > 0 ? `color: ${SEVERITY_COLORS[mostSevereSeverity].bpsText}` : ''}
+            >+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
+            {#if activeDefenseEvents.length > 0}
+              {#each suppressionBadges as badge}
+                <span class="suppression-badge" style="
+                  background: {badge.colors.suppressedBg};
+                  color: {badge.colors.suppressedText};
+                  border: 1px solid {badge.colors.suppressedBorder};
+                ">
+                  {badge.eventName.toUpperCase()} -{badge.pct}%
+                </span>
+              {/each}
+              {#if mostSevereSeverity}
+                <span class="bps-timer" style="color: {SEVERITY_COLORS[mostSevereSeverity].timerText};">
+                  {formattedTimer}
+                </span>
+              {/if}
             {/if}
-          </span>
+          </div>
         {/if}
         {#if $game.visibility.stageDisplay}
-          <span class="stage-label">STAGE: {$game.currentStage} — {$game.stageLabel.toUpperCase()}</span>
+          <div class="system-bar__segment" title="Stage {$game.currentStage} of {hostDefinitions.length}. Host: {$game.hostName}. Advance by reaching 100% degradation.">
+            <span class="system-bar__segment-label">STAGE</span>
+            <span class="system-bar__segment-value">{$game.currentStage.toString().padStart(2, '0')}</span>
+            <span class="system-bar__stage-name">{$game.stageLabel.toUpperCase()}</span>
+          </div>
         {/if}
       </div>
     </header>
@@ -943,22 +1208,24 @@
         <section class="workspace-main">
             <div class="workspace-main__center">
               <div class="terminal-focus">
-                <div class="biomass-chamber">
+                <div class="biomass-chamber" on:click={() => absorbWithProgress()}>
                   <p class="biomass-chamber__label">CURRENT TOTAL BIOMASS</p>
-                  <h2 class="biomass-chamber__value">{formatBiomass($game.biomass, useScientificNotation)}<span> Ψ</span></h2>
-                  <!-- biomass-chamber__event hidden — manifestation toast replaces it -->
-                  <!-- {#if latestLogEntry}
-                    <p class="biomass-chamber__event">{latestLogEntry}</p>
-                  {/if} -->
+                  <h2 class="biomass-chamber__value" class:biomass-chamber__value--pulse={biomassPulse}>{formatBiomass($game.biomass, useScientificNotation)}<span> Ψ</span></h2>
                   {#if $game.visibility.bpsDisplay}
                     <p class="biomass-chamber__label">
                       PASSIVE ABSORPTION ::
-                      <span class:bps-suppressed={suppressionActive}>+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
+                      <span class:bps-suppressed={suppressionActive} class:bps-lift-flash={bpsLiftFlash}>+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
                       {#if suppressionActive}
                         <span class="bps-suppression-tag">{suppressionLabel}</span>
                       {/if}
                     </p>
-                    <p class="biomass-chamber__label">CLICK :: +{formatBiomass($game.biomassPerClick, useScientificNotation)} Ψ</p>
+                    <p class="biomass-chamber__label" title="Each click yields this many times your current per-second output. Active play is significantly amplified.">CLICK :: +{formatBiomass($game.biomassPerClick, useScientificNotation)} Ψ [≈ {($game.biomassPerSecond.gt(0) ? $game.biomassPerClick.div($game.biomassPerSecond).toFixed(1) : '—')}&times; BPS]</p>
+                  {/if}
+                  {#if $game.clickCount === 0}
+                    <p class="biomass-chamber__hint">CLICK TO ABSORB</p>
+                  {/if}
+                  {#if $game.manifestationQueue.length > 0}
+                    <p class="biomass-chamber__event">{$game.manifestationQueue[0]}</p>
                   {/if}
                 </div>
 
@@ -968,20 +1235,6 @@
               </div>
 
               {#if $game.visibility.hostHealthBar || ($game.hostCompleted && hasNextStage($game))}
-              <div class:reveal-enter={isNewReveal('hostHealthBar') || isNewReveal('stageDisplay')} on:animationend={() => {
-                finishReveal('hostHealthBar')
-                finishReveal('stageDisplay')
-              }}>
-              <HostVisual
-                corruption={$game.hostCorruptionPercent}
-                manifestationQueue={$game.manifestationQueue}
-                hostName={$game.hostName}
-                hostCompleted={$game.hostCompleted}
-                disabled={absorbProgress > 0}
-                progress={absorbProgress}
-                firstTime={$game.clickCount === 0}
-                on:click={() => absorbWithProgress()}
-              />
               <TerminalPanel
                 title="SUBSTRATE ANALYSIS"
                 tag="HOST"
@@ -992,55 +1245,35 @@
                   <div>
                     <p class="analysis-panel__sub">HOST: {$game.hostName.toUpperCase()}</p>
                   </div>
-
-                {#if $game.activeDefenseEvents.length > 0}
-                  <div class="analysis-alerts">
-                    {#each $game.activeDefenseEvents as event}
-                      {@const severity = getEventSeverity(event)}
-                      {@const penalties = getEventPenaltyBreakdown(event)}
-                      {@const flavorHint = getEventFlavorHint(event)}
-                      <div class="analysis-alert analysis-alert--{severity.toLowerCase()}">
-                        <div class="analysis-alert__header">
-                          <span class="analysis-alert__severity">[{severity}]</span>
-                          <span class="analysis-alert__name">{event.name.toUpperCase()}</span>
-                          <span class="analysis-alert__timer">[{getRemainingDurationLabel(event.endsAt)}]</span>
-                        </div>
-                        {#each penalties as penalty}
-                          <div class="analysis-alert__penalty">{penalty}</div>
-                        {/each}
-                        {#if flavorHint}
-                          <div class="analysis-alert__flavor">{flavorHint}</div>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
               </div>
 
                 <div class="analysis-panel__progress">
                   <div class="analysis-panel__row">
                     <span>DEGRADATION PROGRESS</span>
                   </div>
-                  <div class="analysis-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={hostProgressPercent} aria-label="Degradation progress">
+                  <div
+                    class="analysis-progress-bar"
+                    class:analysis-progress-bar--accelerating={hostProgressPercent >= 50 && hostProgressPercent < 80}
+                    class:analysis-progress-bar--critical={hostProgressPercent >= 80}
+                    role="progressbar"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={hostProgressPercent}
+                    aria-label="Degradation progress"
+                    title="Host degradation represents how deeply the mycelium has compromised this host. At 100%, the host is consumed and you advance to the next stage."
+                  >
                     <div class="analysis-progress-bar__fill" aria-hidden="true" style={`width: ${hostProgressPercent}%`}></div>
-                    <span class="analysis-progress-bar__label analysis-progress-bar__label--track">{hostProgressLabel}</span>
-                    <span class="analysis-progress-bar__label analysis-progress-bar__label--fill" aria-hidden="true" style={`clip-path: inset(0 ${100 - hostProgressPercent}% 0 0)`}>{hostProgressLabel}</span>
+                    <span class="analysis-progress-bar__label analysis-progress-bar__label--track">
+                      {hostProgressLabel} [+{degradationRate.toFixed(2)}%/s]{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
+                    </span>
+                    <span class="analysis-progress-bar__label analysis-progress-bar__label--fill" aria-hidden="true" style={`clip-path: inset(0 ${100 - hostProgressPercent}% 0 0)`}>
+                      {hostProgressLabel} [+{degradationRate.toFixed(2)}%/s]{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
+                    </span>
                   </div>
                 </div>
 
-              <div class="analysis-panel__meta">
-                {#if $game.activeDefenseEvents.length > 0}
-                  {#each $game.activeDefenseEvents as event}
-                    <p>Defense :: {event.name.toUpperCase()} / {getRemainingDurationLabel(event.endsAt)}</p>
-                  {/each}
-                {/if}
-              </div>
-
-              <p class="analysis-panel__flavor">{getCurrentHostFlavor()}</p>
-              {#if $game.activeDefenseEvents.length > 0}
-                <p class="analysis-panel__flavor analysis-panel__flavor--muted">Defense Pattern :: {getDynamicDefensePattern()}</p>
-                <p class="analysis-panel__flavor analysis-panel__flavor--muted">Transition Signal :: {getDynamicTransitionSignal()}</p>
-              {/if}
+              <hr class="log-divider" />
+              <ObservationFeed entries={$game.structuredLog} maxVisible={5} />
 
               {#if $game.hostCompleted && hasNextStage($game)}
                 <div class="analysis-panel__advance">
@@ -1048,7 +1281,6 @@
                 </div>
               {/if}
               </TerminalPanel>
-              </div>
               {/if}
 
               {#if $game.currentStage >= BALANCE.DEFENSE_FORECAST_UNLOCK_STAGE}
@@ -1064,27 +1296,45 @@
                   {#if $game.activeDefenseEvents.length > 0}
                     <p class="analysis-panel__flavor analysis-panel__flavor--alert">Status: {getDefenseStatusLabel()}</p>
                   {:else if $game.equippedCountermeasure === null}
-                    <p class="analysis-panel__flavor">Choose one countermeasure for this run. Once selected, it locks until Spore Release.</p>
+                    <!-- countermeasure prompt removed -->
+                  {:else}
                   {/if}
+                  <div class="defense-control__legend">
+                    <span><strong>FULL:</strong> completely neutralizes the listed event.</span>
+                    <span><strong>PARTIAL:</strong> reduces but does not eliminate the event's effect.</span>
+                  </div>
                   <div class="strain-grid defense-control__grid">
+                    {#if equippedCountermeasure?.flavorLine}
+                      <p class="defense-status">CURRENT STATUS: {equippedCountermeasure.flavorLine}</p>
+                    {/if}
                     {#each countermeasureDefinitions as countermeasure}
                       {@const isActive = $game.equippedCountermeasure === countermeasure.id}
                       {@const isLocked = $game.activeDefenseEvents.length > 0 && !isActive}
+                      {@const isFullMatch = countermeasure.targetEventIds.some(id => $game.activeDefenseEvents.some(e => e.id === id))}
+                      {@const isPartialMatch = countermeasure.partialEventIds.some(id => $game.activeDefenseEvents.some(e => e.id === id))}
+                      {@const isEngaged = isFullMatch || isPartialMatch}
                       <button
                         class="strain-card"
                         class:strain-card--locked={isLocked}
+                        class:strain-card--active={isActive}
+                        class:strain-card--engaged-full={isEngaged && isFullMatch}
+                        class:strain-card--engaged-partial={isEngaged && !isFullMatch}
                         disabled={isLocked}
                         type="button"
                         on:click={() => game.equipCountermeasure(countermeasure.id)}
-                        style={isActive ? `background-color: ${countermeasure.uiAccentColor}20;` : ''}
                       >
+                        <div class="strain-card__status">
+                          {#if isFullMatch}
+                            STATUS: ENGAGED [FULL]
+                          {:else if isPartialMatch}
+                            STATUS: ENGAGED [PARTIAL]
+                          {:else}
+                            STATUS: DORMANT
+                          {/if}
+                        </div>
                         <strong>{countermeasure.name}</strong>
-                        <span>{countermeasure.description}</span>
-                        {#if isActive && countermeasure.flavorLine}
-                          <em><small>{countermeasure.flavorLine}</small></em>
-                        {/if}
-                        <small>Full: {getCountermeasureFullCoverage(countermeasure.id)}</small>
-                        <small>Partial: {getCountermeasurePartialCoverage(countermeasure.id)}</small>
+                        <small class:strain-card__trigger--full={isFullMatch} class:strain-card__trigger--partial={isPartialMatch && !isFullMatch}>Full: {getCountermeasureFullCoverage(countermeasure.id)}</small>
+                        <small class:strain-card__trigger--full={isFullMatch} class:strain-card__trigger--partial={isPartialMatch && !isFullMatch}>Partial: {getCountermeasurePartialCoverage(countermeasure.id)}</small>
                       </button>
                     {/each}
                   </div>
@@ -1094,16 +1344,7 @@
           </section>
 
           <aside class="workspace-sidebar">
-          {#if $game.visibility.observationLog}
-            <div class="sidebar-tabs">
-              <button class:sidebar-tab={true} class:sidebar-tab--active={sidebarTab === 'modules'} type="button" on:click={() => sidebarTab = 'modules'}>[+] MODULES</button>
-              <button class:sidebar-tab={true} class:sidebar-tab--active={sidebarTab === 'logs'} type="button" on:click={() => sidebarTab = 'logs'}>[=] LOGS</button>
-            </div>
-          {/if}
-
-          {#if sidebarTab === 'modules' || !$game.visibility.observationLog}
           <div class="sidebar-modules">
-          {#if $game.visibility.generatorPanel}
           <div class:reveal-enter={isNewReveal('generatorPanel')} on:animationend={() => finishReveal('generatorPanel')}>
           <TerminalPanel
             title="GENERATOR_MODULES"
@@ -1113,8 +1354,18 @@
             <div class="modules-list">
               {#each generatorDefinitions as generator, index}
                 {#if $game.visibility.generatorTiers[index]}
+                {@const affordable = canAffordGenerator.get(generator.id) ?? false}
+                {@const shortfall = getGeneratorCost($game, generator.id).minus($game.biomass)}
+                {@const contribution = $game.biomassPerSecond.gt(0) ? getGeneratorProduction($game, generator.id).div($game.biomassPerSecond).toNumber() : 0}
+                {@const generatorCounts = GENERATOR_TIER_ORDER.map(id => $game.generators[id]?.owned ?? 0)}
+                {@const rawEff = index > 0 ? getSubstrateRawEfficiency(index, generatorCounts) : 1}
+                {@const effPct = index > 0 ? getSubstrateEfficiencyPercent(index, generatorCounts) : 100}
+                {@const substrateStatus = index > 0 ? getSubstrateStatus(rawEff) : 'sufficient'}
                 <div
-                  class:module-card={true}
+                  class="module-card"
+                  class:module-card--unaffordable={!affordable}
+                  class:module-card--can-afford-flash={canAffordFlashMap.get(generator.id)}
+                  class:module-card--purchase-flash={purchaseFlashMap.get(generator.id)}
                   class:reveal-enter={isNewReveal(`generatorTier-${index}`)}
                   on:animationend={() => finishReveal(`generatorTier-${index}`)}
                 >
@@ -1123,13 +1374,16 @@
                       <h3>{generator.name}</h3>
                       <p>{generator.flavor}</p>
                     </div>
-                    <span class="module-card__count">
+                    <span
+                      class="module-card__count"
+                      class:module-card__count--pulse={countPulseMap.get(generator.id)}
+                    >
                       {$game.generators[generator.id].owned.toString().padStart(2, '0')}
                     </span>
                   </div>
 
                   <div class="module-card__footer">
-                    <span>
+                    <span class:module-card__output--tick={outputTickMap.get(generator.id)}>
                       {#if getGeneratorDisruption(generator.id)}
                         {@const disruption = getGeneratorDisruption(generator.id)}
                         OUTPUT: DISRUPTED [{disruption ? getRemainingDurationLabel(disruption.endsAt) : ''}]
@@ -1137,21 +1391,38 @@
                         OUTPUT: +{formatBiomass(getGeneratorProduction($game, generator.id), useScientificNotation)} Ψ/sec
                       {/if}
                     </span>
-                    <span>COST: {formatBiomass(getGeneratorCost($game, generator.id), useScientificNotation)} Ψ</span>
+                    <span>COST: {formatBiomass(getGeneratorCost($game, generator.id), useScientificNotation)} Ψ {#if !affordable}<span class="module-card__shortfall">NEED {formatBiomass(shortfall, false)} MORE Ψ</span>{/if}</span>
                   </div>
+                  <div class="module-card__contribution-bar" title="This generator's share of total BPS">
+                    <div class="module-card__contribution-fill" style="width: {Math.min(contribution * 100, 100).toFixed(1)}%"></div>
+                  </div>
+                  <p class="module-card__contribution-label">CONTRIBUTION: {(contribution * 100).toFixed(1)}%</p>
+                  {#if index >= 1 && $game.generators[generator.id].owned > 0}
+                    <p class="module-card__substrate module-card__substrate--{substrateStatus}">
+                      SUBSTRATE: {substrateStatus === 'sufficient' ? 'SUFFICIENT' : substrateStatus === 'strained' ? `STRAINED [${effPct}%]` : `DEPLETED [${effPct}%]`}
+                    </p>
+                  {/if}
                   <div class="module-card__actions">
-                    <span>{getGeneratorBuyGain(generator.id)}</span>
+                    <span
+                      class="module-card__buy-gain"
+                      class:module-card__buy-gain--disabled={!affordable}
+                      title="Buying one more {generator.name} will increase your passive BPS by this amount."
+                    >NEXT: {getGeneratorBuyGain(generator.id)}</span>
                     <button
                       class="terminal-button terminal-button--secondary"
-                      class:terminal-button--disabled={!canAffordGenerator.get(generator.id)}
-                      disabled={!canAffordGenerator.get(generator.id)}
+                      class:terminal-button--disabled={!affordable}
+                      disabled={!affordable}
                       type="button"
                       on:pointerdown={(event) => startGeneratorBuyHold(generator.id, event)}
                       on:pointerup={clearGeneratorBuyHold}
                       on:pointerleave={clearGeneratorBuyHold}
                       on:pointercancel={clearGeneratorBuyHold}
                     >
-                      [ BUY ]
+                      {#if buyBtnAcquiredMap.get(generator.id)}
+                        <span class="module-card__buy-btn-text--acquired">[ ACQUIRED ]</span>
+                      {:else}
+                        [ BUY ]
+                      {/if}
                     </button>
                   </div>
                 </div>
@@ -1175,7 +1446,6 @@
 
           </TerminalPanel>
           </div>
-          {/if}
 
             {#if $game.visibility.upgradePanel}
             <div class:reveal-enter={isNewReveal('upgradePanel')} on:animationend={() => finishReveal('upgradePanel')}>
@@ -1215,11 +1485,6 @@
               on:setPreemptive={() => game.setPreemptiveCountermeasure()}
             />
           </div>
-          {:else}
-            <div class="sidebar-log">
-              <TypewriterLog entries={$game.log.slice(-12)} />
-            </div>
-          {/if}
           </aside>
       </div>
 
@@ -1245,23 +1510,12 @@
           {#if $game.visibility.bpsDisplay}
             <p class="mobile-hero__label">
               PASSIVE ::
-              <span class:bps-suppressed={suppressionActive}>+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
+              <span class:bps-suppressed={suppressionActive} class:bps-lift-flash={bpsLiftFlash}>+{formatBPS($game.biomassPerSecond, useScientificNotation)}</span>
               {#if suppressionActive}
                 <span class="bps-suppression-tag">{suppressionLabel}</span>
               {/if}
             </p>
-            <p class="mobile-hero__label">TAP :: +{formatBiomass($game.biomassPerClick, useScientificNotation)} Ψ</p>
-          {/if}
-
-          {#if $game.activeDefenseEvents.length > 0}
-            <div class="mobile-defense-strip reveal-enter" aria-label="Active defense events">
-              {#each $game.activeDefenseEvents as event}
-                <div class="mobile-defense-strip__event">
-                  <strong>{event.name.toUpperCase()}</strong>
-                  <span>{getRemainingDurationLabel(event.endsAt)}</span>
-                </div>
-              {/each}
-            </div>
+            <p class="mobile-hero__label" title="Each click yields this many times your current per-second output. Active play is significantly amplified.">TAP :: +{formatBiomass($game.biomassPerClick, useScientificNotation)} Ψ [≈ {($game.biomassPerSecond.gt(0) ? $game.biomassPerClick.div($game.biomassPerSecond).toFixed(1) : '—')}&times; BPS]</p>
           {/if}
 
           <!-- Signal economy temporarily disabled. -->
@@ -1275,17 +1529,6 @@
         {/if}
 
         {#if $game.visibility.hostHealthBar || ($game.hostCompleted && hasNextStage($game))}
-        <div class="mobile-host-card-wrapper">
-        <HostVisual
-          corruption={$game.hostCorruptionPercent}
-          manifestationQueue={$game.manifestationQueue}
-          hostName={$game.hostName}
-          hostCompleted={$game.hostCompleted}
-          disabled={absorbProgress > 0}
-          progress={absorbProgress}
-          firstTime={$game.clickCount === 0}
-          on:click={() => absorbWithProgress()}
-        />
         <TerminalPanel title="SUBSTRATE ANALYSIS" tag="+" variant="low" bleedHeader={true} className="mobile-card">
           <div class="mobile-analysis__header">
             <div>
@@ -1297,10 +1540,24 @@
           <div class="mobile-analysis__progress-row">
             <span>DEGRADATION PROGRESS</span>
           </div>
-          <div class="analysis-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={hostProgressPercent} aria-label="Degradation progress">
+          <div
+            class="analysis-progress-bar"
+            class:analysis-progress-bar--accelerating={hostProgressPercent >= 50 && hostProgressPercent < 80}
+            class:analysis-progress-bar--critical={hostProgressPercent >= 80}
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={hostProgressPercent}
+            aria-label="Degradation progress"
+            title="Host degradation represents how deeply the mycelium has compromised this host. At 100%, the host is consumed and you advance to the next stage."
+          >
             <div class="analysis-progress-bar__fill" aria-hidden="true" style={`width: ${hostProgressPercent}%`}></div>
-            <span class="analysis-progress-bar__label analysis-progress-bar__label--track">{hostProgressLabel}</span>
-            <span class="analysis-progress-bar__label analysis-progress-bar__label--fill" aria-hidden="true" style={`clip-path: inset(0 ${100 - hostProgressPercent}% 0 0)`}>{hostProgressLabel}</span>
+            <span class="analysis-progress-bar__label analysis-progress-bar__label--track">
+              {hostProgressLabel} [+{degradationRate.toFixed(2)}%/s]{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
+            </span>
+            <span class="analysis-progress-bar__label analysis-progress-bar__label--fill" aria-hidden="true" style={`clip-path: inset(0 ${100 - hostProgressPercent}% 0 0)`}>
+              {hostProgressLabel} [+{degradationRate.toFixed(2)}%/s]{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
+            </span>
           </div>
 
           <div class="mobile-alert-card">
@@ -1332,7 +1589,7 @@
             </div>
           </div>
 
-          <p class="mobile-analysis__flavor">{getCurrentHostFlavor()}</p>
+          <p class="mobile-analysis__flavor">{currentHostFlavor}</p>
           <p class="mobile-analysis__flavor">Threat :: {getCurrentHostThreatLevel()}</p>
           {#if $game.activeDefenseEvents.length > 0}
             <p class="mobile-analysis__flavor">Defense Pattern :: {getDynamicDefensePattern()}</p>
@@ -1345,7 +1602,6 @@
             </button>
           {/if}
         </TerminalPanel>
-        </div>
         {/if}
 
         {#if $game.currentStage >= BALANCE.DEFENSE_FORECAST_UNLOCK_STAGE}
@@ -1356,25 +1612,25 @@
             {#if $game.activeDefenseEvents.length > 0}
               <p class="mobile-analysis__flavor mobile-analysis__flavor--alert">Status: {getDefenseStatusLabel()}</p>
             {:else if $game.equippedCountermeasure === null}
-              <p class="mobile-analysis__flavor">Choose one countermeasure for this run. Once selected, it locks until Spore Release.</p>
+              <!-- countermeasure prompt removed -->
+            {:else}
             {/if}
             <div class="mobile-strain-list defense-control__list">
+              {#if equippedCountermeasure?.flavorLine}
+                <p class="defense-status">CURRENT STATUS: {equippedCountermeasure.flavorLine}</p>
+              {/if}
               {#each countermeasureDefinitions as countermeasure}
                 {@const isActive = $game.equippedCountermeasure === countermeasure.id}
                 {@const isLocked = $game.activeDefenseEvents.length > 0 && !isActive}
                 <button
                   class="mobile-strain-button"
                   class:mobile-strain-button--locked={isLocked}
+                  class:mobile-strain-button--active={isActive}
                   disabled={isLocked}
                   type="button"
                   on:click={() => game.equipCountermeasure(countermeasure.id)}
-                  style={isActive ? `background-color: ${countermeasure.uiAccentColor}20;` : ''}
                 >
                   <strong>{countermeasure.name.toUpperCase()}</strong>
-                  <span>{countermeasure.description}</span>
-                  {#if isActive && countermeasure.flavorLine}
-                    <em><small>{countermeasure.flavorLine}</small></em>
-                  {/if}
                   <small>Full: {getCountermeasureFullCoverage(countermeasure.id)}</small>
                   <small>Partial: {getCountermeasurePartialCoverage(countermeasure.id)}</small>
                 </button>
@@ -1391,6 +1647,10 @@
           <div class="mobile-generator-list">
             {#each generatorDefinitions as generator, index}
               {#if $game.visibility.generatorTiers[index]}
+              {@const generatorCounts = GENERATOR_TIER_ORDER.map(id => $game.generators[id]?.owned ?? 0)}
+              {@const rawEff = index > 0 ? getSubstrateRawEfficiency(index, generatorCounts) : 1}
+              {@const effPct = index > 0 ? getSubstrateEfficiencyPercent(index, generatorCounts) : 100}
+              {@const substrateStatus = index > 0 ? getSubstrateStatus(rawEff) : 'sufficient'}
               <div class="mobile-generator-row">
                 <div class="mobile-generator-row__body">
                   <h3>{generator.name.toUpperCase()} ({$game.generators[generator.id].owned})</h3>
@@ -1403,6 +1663,11 @@
                       OUTPUT: +{formatBiomass(getGeneratorProduction($game, generator.id), useScientificNotation)} Ψ/SEC
                     {/if}
                   </p>
+                  {#if index >= 1 && $game.generators[generator.id].owned > 0}
+                    <p class="mobile-generator-row__substrate mobile-generator-row__substrate--{substrateStatus}">
+                      SUBSTRATE: {substrateStatus === 'sufficient' ? 'SUFFICIENT' : substrateStatus === 'strained' ? `STRAINED [${effPct}%]` : `DEPLETED [${effPct}%]`}
+                    </p>
+                  {/if}
                 </div>
                 <button class="mobile-generator-row__buy" disabled={!canAffordGenerator.get(generator.id)} type="button"
                   on:pointerdown={(event) => startGeneratorBuyHold(generator.id, event)}
@@ -1465,26 +1730,32 @@
                 <div class="overview-stat">
                   <span class="overview-stat__label">HOSTS CONSUMED</span>
                   <strong>{getCompletedHosts($game).toString().padStart(2, '0')}</strong>
+                  <span class="overview-stat__sublabel">this run</span>
                 </div>
                 <div class="overview-stat">
                   <span class="overview-stat__label">LIFETIME BIOMASS</span>
                   <strong>{formatDecimal($game.lifetimeBiomass)}</strong>
+                  <span class="overview-stat__sublabel">all runs</span>
                 </div>
                 <div class="overview-stat">
                   <span class="overview-stat__label">GENERATORS OWNED</span>
                   <strong>{getTotalOwnedGenerators().toString().padStart(2, '0')}</strong>
+                  <span class="overview-stat__sublabel">current</span>
                 </div>
                 <div class="overview-stat">
                   <span class="overview-stat__label">UPGRADES APPLIED</span>
                   <strong>{getPurchasedUpgradeCount().toString().padStart(2, '0')}</strong>
+                  <span class="overview-stat__sublabel">this run</span>
                 </div>
                 <div class="overview-stat">
                   <span class="overview-stat__label">MUTATION POINTS</span>
                   <strong>{$game.mutationPoints.toString().padStart(2, '0')}</strong>
+                  <span class="overview-stat__sublabel">available now</span>
                 </div>
                 <div class="overview-stat">
                   <span class="overview-stat__label">CURRENT STRAIN</span>
                   <strong>{getCurrentStrainName()}</strong>
+                  <span class="overview-stat__sublabel">locked until release</span>
                 </div>
               </div>
             </TerminalPanel>
@@ -1496,13 +1767,17 @@
               {@const complexitySynergy = getStrainSynergyLabel($game.strain, 'complexity')}
               <TerminalPanel title="CORE ATTRIBUTES" tag="STATS" variant="low" bleedHeader={true} resizable={true} resizeAxis="both">
                 <div class="desktop-attribute-list">
+                  <div class="attribute-legend">
+                    <span>STANCE: How this attribute interacts with host defenses.</span>
+                    <span>ARCH: The evolutionary pathway this attribute reinforces.</span>
+                  </div>
                   <div class="desktop-attribute-card">
                     <div class="desktop-attribute-card__header">
                       <span>VIRULENCE [V: {$game.stats.virulence}]</span>
                       <div class="desktop-attribute-card__header-side">
-                        {#if virulenceSynergy}<span class="synergy-tag synergy-tag--{virulenceSynergy}">{virulenceSynergy === 'synergy' ? '⚡ SYNERGY' : virulenceSynergy === 'opposition' ? '⚠ OPPOSITION' : '○ NEUTRAL'}</span>{/if}
-                        <span>EXPANSION ENGINE</span>
-                        <button class="desktop-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('virulence')}>+</button>
+                        {#if virulenceSynergy}<span class="synergy-tag synergy-tag--{virulenceSynergy}" title={virulenceSynergy === 'synergy' ? 'Amplified by current strain' : virulenceSynergy === 'opposition' ? 'Penalized by current strain' : 'Balanced interaction with current strain'}>{virulenceSynergy === 'synergy' ? '⚡' : virulenceSynergy === 'opposition' ? '△' : '○'} [STANCE: {virulenceSynergy.toUpperCase()}]</span>{/if}
+                        <span>[ARCH: EXPANSION ENGINE]</span>
+                        <button class="desktop-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('virulence')} title={$game.mutationPoints <= 0 ? 'No mutation points available. Consume more hosts to earn points.' : 'Spend 1 mutation point'}>[+] 1MP</button>
                       </div>
                     </div>
                     <p>Aggressive spread protocol. Increases click-power efficiency by 15% per rank.</p>
@@ -1510,7 +1785,7 @@
                       {@const currentBonus = getEffectiveStatBonus($game.stats.virulence, BALANCE.VIRULENCE_CLICK_BONUS_PER_POINT, $game.strain, 'virulence', $game.geneticMemoryStats)}
                       {@const nextBonus = getEffectiveStatBonus($game.stats.virulence + 1, BALANCE.VIRULENCE_CLICK_BONUS_PER_POINT, $game.strain, 'virulence', $game.geneticMemoryStats)}
                       {@const increase = ((nextBonus - currentBonus) / currentBonus * 100) || (nextBonus * 100)}
-                      <p class="stat-preview">Next: Click power +{increase.toFixed(1)}%</p>
+                      <p class="stat-preview">Next: Click power +{isFinite(increase) ? increase.toFixed(1) + '%' : '—'}</p>
                     {/if}
                   </div>
 
@@ -1518,9 +1793,9 @@
                     <div class="desktop-attribute-card__header">
                       <span>RESILIENCE [R: {$game.stats.resilience}]</span>
                       <div class="desktop-attribute-card__header-side">
-                        {#if resilienceSynergy}<span class="synergy-tag synergy-tag--{resilienceSynergy}">{resilienceSynergy === 'synergy' ? '⚡ SYNERGY' : resilienceSynergy === 'opposition' ? '⚠ OPPOSITION' : '○ NEUTRAL'}</span>{/if}
-                        <span>SURVIVAL MESH</span>
-                        <button class="desktop-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('resilience')}>+</button>
+                        {#if resilienceSynergy}<span class="synergy-tag synergy-tag--{resilienceSynergy}" title={resilienceSynergy === 'synergy' ? 'Amplified by current strain' : resilienceSynergy === 'opposition' ? 'Penalized by current strain' : 'Balanced interaction with current strain'}>{resilienceSynergy === 'synergy' ? '⚡' : resilienceSynergy === 'opposition' ? '△' : '○'} [STANCE: {resilienceSynergy.toUpperCase()}]</span>{/if}
+                        <span>[ARCH: SURVIVAL MESH]</span>
+                        <button class="desktop-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('resilience')} title={$game.mutationPoints <= 0 ? 'No mutation points available. Consume more hosts to earn points.' : 'Spend 1 mutation point'}>[+] 1MP</button>
                       </div>
                     </div>
                     <p>Cellular wall density. Reduces system defense resistance by 8% per rank.</p>
@@ -1528,7 +1803,7 @@
                       {@const currentBonus = getEffectiveStatBonus($game.stats.resilience, BALANCE.RESILIENCE_DEFENSE_PER_POINT, $game.strain, 'resilience', $game.geneticMemoryStats)}
                       {@const nextBonus = getEffectiveStatBonus($game.stats.resilience + 1, BALANCE.RESILIENCE_DEFENSE_PER_POINT, $game.strain, 'resilience', $game.geneticMemoryStats)}
                       {@const increase = ((nextBonus - currentBonus) * 100) || (nextBonus * 100)}
-                      <p class="stat-preview">Next: Defense mitigation +{increase.toFixed(1)}%</p>
+                      <p class="stat-preview">Next: Defense mitigation +{isFinite(increase) ? increase.toFixed(1) + '%' : '—'}</p>
                     {/if}
                   </div>
 
@@ -1536,9 +1811,9 @@
                     <div class="desktop-attribute-card__header">
                       <span>COMPLEXITY [C: {$game.stats.complexity}]</span>
                       <div class="desktop-attribute-card__header-side">
-                        {#if complexitySynergy}<span class="synergy-tag synergy-tag--{complexitySynergy}">{complexitySynergy === 'synergy' ? '⚡ SYNERGY' : complexitySynergy === 'opposition' ? '⚠ OPPOSITION' : '○ NEUTRAL'}</span>{/if}
-                        <span>COGNITIVE ARCH</span>
-                        <button class="desktop-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('complexity')}>+</button>
+                        {#if complexitySynergy}<span class="synergy-tag synergy-tag--{complexitySynergy}" title={complexitySynergy === 'synergy' ? 'Amplified by current strain' : complexitySynergy === 'opposition' ? 'Penalized by current strain' : 'Balanced interaction with current strain'}>{complexitySynergy === 'synergy' ? '⚡' : complexitySynergy === 'opposition' ? '△' : '○'} [STANCE: {complexitySynergy.toUpperCase()}]</span>{/if}
+                        <span>[ARCH: COGNITIVE ARCH]</span>
+                        <button class="desktop-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('complexity')} title={$game.mutationPoints <= 0 ? 'No mutation points available. Consume more hosts to earn points.' : 'Spend 1 mutation point'}>[+] 1MP</button>
                       </div>
                     </div>
                     <p>Synaptic mapping. Improves passive output and upgrade efficiency.</p>
@@ -1546,7 +1821,7 @@
                       {@const currentBonus = getEffectiveStatBonus($game.stats.complexity, BALANCE.COMPLEXITY_PASSIVE_BONUS_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
                       {@const nextBonus = getEffectiveStatBonus($game.stats.complexity + 1, BALANCE.COMPLEXITY_PASSIVE_BONUS_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
                       {@const increase = ((nextBonus - currentBonus) * 100) || (nextBonus * 100)}
-                      <p class="stat-preview">Next: Passive BPS +{increase.toFixed(1)}%</p>
+                      <p class="stat-preview">Next: Passive BPS +{isFinite(increase) ? increase.toFixed(1) + '%' : '—'}</p>
                     {/if}
                   </div>
 
@@ -1557,44 +1832,41 @@
 
               {#if $game.visibility.strainPrompt || $game.visibility.statsPanel}
               <TerminalPanel title="STRAIN STATUS" tag="NEXT" variant="low" bleedHeader={true} resizable={true} resizeAxis="both">
-                <div class="preview-copy">
-                  <p>Current strain :: {getCurrentStrainName()}</p>
-                  <p>Available mutation points :: {$game.mutationPoints}</p>
-                  {#if $game.strain === 'parasite'}
-                    <p>Defense response :: Counterburst windows spike click output after host defenses trigger.</p>
-                  {:else if $game.strain === 'symbiote'}
-                    <p>Defense response :: Symbiote mesh absorbs a larger share of active defense penalties.</p>
-                  {:else if $game.strain === 'saprophyte'}
-                    <p>Defense response :: Expiring host defenses leave salvageable biomass behind.</p>
-                  {/if}
-                  {#if canChooseStrain()}
-                    <p>Selection protocol unlocked. Choose a dominant phenotype to continue evolution.</p>
-                    <div class="strain-grid">
-                      {#each strainDefinitions as strain}
-                        <button
-                          class="strain-card"
-                          class:strain-card--locked={!$game.unlockedStrains[strain.id]}
-                          disabled={!$game.unlockedStrains[strain.id]}
-                          type="button"
-                          on:click={() => game.chooseStrain(strain.id)}
-                        >
-                          <strong>{strain.name}</strong>
-                          <span>{strain.summary}</span>
-                          <small>{strain.signature}</small>
-                        </button>
-                      {/each}
-                    </div>
-                  {:else}
-                    <p>
-                      {#if getCompletedHosts($game) < 1}
-                        Clear the first host to unlock strain selection.
-                      {:else}
-                        Strain locked in. Build-specific systems can now layer on top of {getCurrentStrainName()}.
-                      {/if}
-                    </p>
-                  {/if}
-
+                <div class="strain-status-fields">
+                  <div class="strain-status-field">
+                    <span class="strain-status-field__label">STRAIN</span>
+                    <span class="strain-status-field__value" title={!canChooseStrain() && $game.strain !== null ? 'Strain is locked for this run. A new strain can be selected after Spore Release.' : ''}>{getCurrentStrainName()} {#if $game.strain}<span class="strain-active-badge">[ACTIVE]</span>{/if}</span>
+                  </div>
+                  <div class="strain-status-field">
+                    <span class="strain-status-field__label">MUTATION PTS</span>
+                    <span class="strain-status-field__value" class:mutation-glow={$game.mutationPoints > 0}>{$game.mutationPoints} available</span>
+                  </div>
+                  <div class="strain-status-field">
+                    <span class="strain-status-field__label">DEFENSE MODE</span>
+                    <span class="strain-status-field__value">{#if $game.strain === 'parasite'}Counterburst windows spike click output after host defenses trigger.{:else if $game.strain === 'symbiote'}Symbiote mesh absorbs a larger share of active defense penalties.{:else if $game.strain === 'saprophyte'}Expiring host defenses leave salvageable biomass behind.{:else}No strain selected{/if}</span>
+                  </div>
+                  <div class="strain-status-field">
+                    <span class="strain-status-field__label">STATUS</span>
+                    <span class="strain-status-field__value">{#if canChooseStrain()}SELECTION PROTOCOL UNLOCKED — Choose a dominant phenotype{:else if getCompletedHosts($game) < 1}Awaiting first host consumption{:else}LOCKED IN — build-specific systems now layered{/if}</span>
+                  </div>
                 </div>
+                {#if canChooseStrain()}
+                  <div class="strain-grid">
+                    {#each strainDefinitions as strain}
+                      <button
+                        class="strain-card"
+                        class:strain-card--locked={!$game.unlockedStrains[strain.id]}
+                        disabled={!$game.unlockedStrains[strain.id]}
+                        type="button"
+                        on:click={() => game.chooseStrain(strain.id)}
+                      >
+                        <strong>{strain.name}</strong>
+                        <span>{strain.summary}</span>
+                        <small>{strain.signature}</small>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
               </TerminalPanel>
               {/if}
             </div>
@@ -1624,29 +1896,57 @@
 
             {#if $game.visibility.skillTree}
             <TerminalPanel title="NEURAL MUTATIONS" tag="SKILL TREE" variant="low" bleedHeader={true} resizable={true} resizeAxis="vertical">
-              <div class="desktop-skill-columns">
-                {#each statBranches as branch}
-                  <div class="desktop-skill-column">
-                    <p class="desktop-skill-column__title">{branch.toUpperCase()}</p>
-                    <div class="desktop-skill-list">
-                      {#each getSkillsForBranch(branch) as skill}
-                        <button
-                          class="desktop-skill-row"
-                          class:desktop-skill-row--purchased={hasSkill(skill.id)}
-                          class:desktop-skill-row--locked={!hasSkill(skill.id) && !canBuySkillMap.get(skill.id)}
-                          disabled={!canBuySkillMap.get(skill.id)}
-                          type="button"
-                          on:click={() => game.purchaseSkill(skill.id)}
-                        >
-                          <div>
-                            <h4>{skill.name}</h4>
-                            <p>{skill.description}</p>
-                            {#if !hasSkill(skill.id)}
-                              <p class="desktop-skill-row__requirement">{getSkillRequirementText(skill)}</p>
+              <div class="skill-panel-header">
+                <div class="skill-panel-header__labels">
+                  <span class="skill-panel-header__tag">SKILL TREE</span>
+                  <span class="skill-panel-header__sep">·</span>
+                  <span class="skill-panel-header__title">NEURAL MUTATIONS</span>
+                </div>
+                <p class="skill-panel-header__desc">Active mutation purchases. Require attribute rank + Biomass cost.</p>
+              </div>
+              <div class="desktop-skill-tree">
+                {#each [1, 3, 5] as tierRank}
+                  <div class="skill-tier">
+                    <div class="skill-tier__label">
+                      <span>TIER {tierRank === 1 ? '1' : tierRank === 3 ? '2' : '3'} — {tierRank === 1 ? 'EARLY ADAPTATION' : tierRank === 3 ? 'DEEP INTEGRATION' : 'APEX MUTATION'}</span>
+                    </div>
+                    <div class="skill-tier__columns">
+                      {#each statBranches as branch}
+                        {@const tierSkills = getSkillsForBranch(branch).filter(s => s.requiredStat === tierRank)}
+                        {#each tierSkills as skill}
+                          <button
+                            class="desktop-skill-row"
+                            class:desktop-skill-row--purchased={hasSkill(skill.id)}
+                            class:desktop-skill-row--locked={!hasSkill(skill.id) && !canBuySkillMap.get(skill.id)}
+                            class:desktop-skill-row--within-reach={isWithinReach(skill)}
+                            class:desktop-skill-row--tier1={tierRank === 1}
+                            disabled={!canBuySkillMap.get(skill.id)}
+                            type="button"
+                            on:click={() => game.purchaseSkill(skill.id)}
+                          >
+                            {#if tierRank === 1 && !hasSkill(skill.id)}
+                              <span class="desktop-skill-row__start-here">START HERE</span>
                             {/if}
-                          </div>
-                          <span>{getSkillStateLabel(skill)}</span>
-                        </button>
+                            <div>
+                              <h4>{skill.name}</h4>
+                              <p>{skill.description}</p>
+                              {#if !hasSkill(skill.id)}
+                                <div class="desktop-skill-row__meta">
+                                  <span class="desktop-skill-row__req" title={`Your current ${skill.branch} rank is ${$game.stats[skill.branch]}. Spend Mutation Points in the Evolution tab to increase it.`}>
+                                    REQ: {skill.branch[0].toUpperCase()}:{skill.requiredStat}
+                                  </span>
+                                  <span class="desktop-skill-row__cost">
+                                    COST: {formatSkillCost(skill.cost)}
+                                  </span>
+                                </div>
+                              {/if}
+                            </div>
+                            <span class="desktop-skill-row__badge" class:desktop-skill-row__badge--integrated={hasSkill(skill.id)} class:desktop-skill-row__badge--can-buy={canBuySkillMap.get(skill.id) && !hasSkill(skill.id)}>{getSkillBadgeText(skill)}</span>
+                            {#if isWithinReach(skill)}
+                              <span class="desktop-skill-row__within-reach">WITHIN REACH</span>
+                            {/if}
+                          </button>
+                        {/each}
                       {/each}
                     </div>
                   </div>
@@ -1789,12 +2089,21 @@
 
         {#if $game.visibility.skillTree}
         <TerminalPanel title="NEURAL_MUTATIONS" tag="✜" variant="low" className="mobile-card mobile-evolution__mutations" bleedHeader={true}>
+          <div class="skill-panel-header">
+            <div class="skill-panel-header__labels">
+              <span class="skill-panel-header__tag">SKILL TREE</span>
+              <span class="skill-panel-header__sep">·</span>
+              <span class="skill-panel-header__title">NEURAL MUTATIONS</span>
+            </div>
+            <p class="skill-panel-header__desc">Active mutation purchases. Require attribute rank + Biomass cost.</p>
+          </div>
           <div class="mobile-mutation-list">
             {#each skillDefinitions as skill}
               <button
                 class="mobile-mutation-row"
                 class:mobile-mutation-row--purchased={hasSkill(skill.id)}
                 class:mobile-mutation-row--locked={!hasSkill(skill.id) && !canBuySkillMap.get(skill.id)}
+                class:mobile-mutation-row--within-reach={isWithinReach(skill)}
                 disabled={!canBuySkillMap.get(skill.id)}
                 type="button"
                 on:click={() => game.purchaseSkill(skill.id)}
@@ -1803,11 +2112,21 @@
                 <div>
                   <div class="mobile-mutation-row__title-wrap">
                     <h3>{skill.name}</h3>
-                    <span>{getSkillStateLabel(skill)}</span>
+                    <span class="mobile-mutation-row__badge" class:mobile-mutation-row__badge--integrated={hasSkill(skill.id)} class:mobile-mutation-row__badge--can-buy={canBuySkillMap.get(skill.id) && !hasSkill(skill.id)}>{getSkillBadgeText(skill)}</span>
                   </div>
                   <p>{skill.description}</p>
                   {#if !hasSkill(skill.id)}
-                    <p class="mobile-mutation-row__requirement">{getSkillRequirementText(skill)}</p>
+                    <div class="mobile-mutation-row__meta">
+                      <span class="mobile-mutation-row__req" title={`Your current ${skill.branch} rank is ${$game.stats[skill.branch]}. Spend Mutation Points in the Evolution tab to increase it.`}>
+                        REQ: {skill.branch[0].toUpperCase()}:{skill.requiredStat}
+                      </span>
+                      <span class="mobile-mutation-row__cost">
+                        COST: {formatSkillCost(skill.cost)}
+                      </span>
+                    </div>
+                    {#if isWithinReach(skill)}
+                      <span class="mobile-mutation-row__within-reach-label">WITHIN REACH</span>
+                    {/if}
                   {/if}
                 </div>
               </button>
@@ -1829,10 +2148,13 @@
                 <div class="overview-stat">
                   <span class="overview-stat__label">CURRENT STAGE</span>
                   <strong>{$game.currentStage.toString().padStart(2, '0')} / {hostDefinitions.length.toString().padStart(2, '0')}</strong>
+                  {#if hasNextStage($game)}
+                    <span class="overview-stat__sublabel">next: Stage {($game.currentStage + 1).toString().padStart(2, '0')}</span>
+                  {/if}
                 </div>
                 <div class="overview-stat">
                   <span class="overview-stat__label">HOST THREAT</span>
-                  <strong>{getCurrentHostThreatLevel()}</strong>
+                  <strong class="threat-level threat-level--{$game.currentStage <= 2 ? 'low' : $game.currentStage <= 4 ? 'medium' : $game.currentStage <= 8 ? 'high' : 'extreme'}">{getCurrentHostThreatLevel()}</strong>
                 </div>
                 <div class="overview-stat">
                   <span class="overview-stat__label">LIFETIME BIOMASS</span>
@@ -1841,10 +2163,16 @@
                 <div class="overview-stat">
                   <span class="overview-stat__label">PRESTIGE SYSTEM</span>
                   <strong>{formatDecimal($game.geneticMemory)} Γ / +{formatDecimal(getGeneticMemoryBonusPercent($game))}%</strong>
+                  {#if $game.geneticMemory.eq(0)}
+                    <span class="overview-stat__sublabel">earn Γ by completing your first full run</span>
+                  {/if}
                 </div>
                 <div class="overview-stat">
                   <span class="overview-stat__label">HIGHEST STAGE</span>
                   <strong>{$game.highestStageReached.toString().padStart(2, '0')}</strong>
+                  {#if $game.highestStageReached === $game.currentStage && $game.highestStageReached > 1}
+                    <span class="overview-stat__badge">PERSONAL BEST</span>
+                  {/if}
                 </div>
               </div>
             </TerminalPanel>
@@ -1852,32 +2180,65 @@
             <div class="dual-panel-grid">
               <TerminalPanel title="RELEASE STATUS" tag="META LOOP" variant="low" bleedHeader={true} resizable={true} resizeAxis="both">
                 <div class="preview-copy spore-release-panel">
-                  <p>Run status :: {getRunStatusLabel()}</p>
-                  <p>{getReleaseRequirementText()}</p>
-                  <p>Current host defense signature :: {getCurrentHostDefenseSignature()}</p>
-                  <p>Transition signal :: {getCurrentHostTransitionSignal()}</p>
-
-                  <div class="spore-stats-grid">
-                    <div class="spore-stat-card">
-                      <span>Current Genetic Memory</span>
-                      <strong>{formatBiomass($game.geneticMemory)}</strong>
+                  <div class="spore-progress-bar">
+                    <div class="spore-progress-bar__labels">
+                      <span>ROOTED</span>
+                      <span>{hostDefinitions.length - $game.currentStage} STAGES REMAINING</span>
+                      <span>RELEASE</span>
                     </div>
-                    <div class="spore-stat-card">
-                      <span>Projected Gain</span>
-                      <strong>+{formatDecimal(getProjectedGeneticMemoryGain($game))} Γ</strong>
+                    <div class="spore-progress-bar__track">
+                      <div class="spore-progress-bar__fill" style={`width: ${($game.currentStage / hostDefinitions.length) * 100}%`}></div>
                     </div>
-                    <div class="spore-stat-card">
-                      <span>Total After Release</span>
-                      <strong>{formatDecimal(getProjectedGeneticMemoryTotal($game))} Γ</strong>
-                    </div>
-                    <div class="spore-stat-card">
-                      <span>Projected Bonus</span>
-                      <strong>+{formatDecimal(getProjectedGeneticMemoryBonusPercent($game))}%</strong>
+                    <div class="spore-progress-bar__markers">
+                      <span>{$game.currentStage.toString().padStart(2, '0')} / {hostDefinitions.length.toString().padStart(2, '0')}</span>
                     </div>
                   </div>
 
-                  <p>Spore Release resets current run progress, clears owned generators and upgrades, and forces a fresh strain selection.</p>
-                  <p>Saprophyte becomes permanently available after the first successful release.</p>
+                  <div class="transmission-block">
+                    <span class="transmission-block__label">TRANSMISSION INTERCEPTED</span>
+                    <p class="transmission-block__text">"{getCurrentHostTransitionSignal()}"</p>
+                  </div>
+
+                  <p>Run status :: {getRunStatusLabel()} — {getReleaseRequirementText()}</p>
+                  <p>Current host defense signature :: {getCurrentHostDefenseSignature()}</p>
+
+                  <div class="spore-hero-bonus">
+                    <span class="spore-hero-bonus__label">RELEASING NOW WOULD GRANT</span>
+                    <strong class="spore-hero-bonus__value">+{formatDecimal(getProjectedGeneticMemoryBonusPercent($game))}%</strong>
+                    <span class="spore-hero-bonus__sublabel">PERMANENT BONUS</span>
+                  </div>
+
+                  <div class="spore-memory-summary">
+                    <div class="spore-memory-summary__row">
+                      <span class="spore-memory-summary__label" title="Genetic Memory (Γ) is earned by completing runs. More hosts consumed and higher stages reached yield more Γ per release.">GENETIC MEMORY</span>
+                      <span class="spore-memory-summary__value">{formatDecimal($game.geneticMemory)} current</span>
+                      <span class="spore-memory-summary__arrow">→</span>
+                      <span class="spore-memory-summary__value spore-memory-summary__value--gain">+{formatDecimal(getProjectedGeneticMemoryGain($game))} Γ projected</span>
+                      <span class="spore-memory-summary__equals">=</span>
+                      <span class="spore-memory-summary__value spore-memory-summary__value--total" title="This permanent multiplier applies to all future runs and compounds with each Spore Release.">{formatDecimal(getProjectedGeneticMemoryTotal($game))} Γ total</span>
+                    </div>
+                  </div>
+
+                  <div class="reset-persist-grid">
+                    <div class="reset-persist-grid__column reset-persist-grid__column--resets">
+                      <span class="reset-persist-grid__header">✗ RESETS</span>
+                      <ul>
+                        <li>Current biomass</li>
+                        <li>Owned generators</li>
+                        <li>Upgrades applied</li>
+                        <li>Strain selection</li>
+                      </ul>
+                    </div>
+                    <div class="reset-persist-grid__column reset-persist-grid__column--persists">
+                      <span class="reset-persist-grid__header">✓ PERSISTS</span>
+                      <ul>
+                        <li>Genetic Memory (Γ)</li>
+                        <li>Permanent bonus %</li>
+                        <li>Highest stage reached</li>
+                        <li>Saprophyte strain (after 1st)</li>
+                      </ul>
+                    </div>
+                  </div>
 
                    {#if $game.visibility.prestigeButton && isConfirmingSporeRelease}
                     <div class="spore-confirmation">
@@ -1898,7 +2259,8 @@
               </TerminalPanel>
 
               <TerminalPanel title="SUBSTRATE MEMORY" tag="LOG" variant="low" bleedHeader={true} resizable={true} resizeAxis="both">
-                <TypewriterLog entries={$game.log.slice(-8)} />
+                <p class="panel-descriptor">A record of mycelial activity and host interactions this run.</p>
+                <ObservationFeed entries={$game.structuredLog} maxVisible={8} fade={false} />
               </TerminalPanel>
             </div>
           </div>
@@ -2066,8 +2428,15 @@ MYCELIUM_ROOT_v1`}</pre>
       <button class:mobile-tabbar__item={true} class:mobile-tabbar__item--active={activeView === item.id} type="button" on:click={() => (activeView = item.id)}>
         <span>{item.symbol}</span>
         <span>{item.label}</span>
+        {#if item.id === 'evolution' && $game.mutationPoints > 0}
+          <span class="mutation-dot"></span>
+        {/if}
       </button>
     {/each}
+    <button class="mobile-tabbar__item mobile-tabbar__item--danger" type="button" on:click={resetGameForDebug}>
+      <span>[!]</span>
+      <span>RESET</span>
+    </button>
   </nav>
 
   {#if $game.visibility.strainPrompt && $game.strain === null}
@@ -2178,12 +2547,19 @@ MYCELIUM_ROOT_v1`}</pre>
                 <p class="wiki-article__summary">No wiki entries match the current search and section filters.</p>
               {/if}
              </div>
-           {/if}
-         </div>
-       </div>
-     </div>
-   {/if}
- </div>
- {/if}
+            {/if}
+          </div>
+        </div>
+      </div>
+    {/if}
+  </div>
+  {/if}
 
- <DefenseToast state={$game} />
+  <DefenseToast state={$game} />
+
+  <HostBackground
+    hostId={getHostConfigId($game)}
+    degradation={$game.hostCorruptionPercent / 100}
+    integrationProgress={$game.currentStage === 11 ? $game.integrationMeter / BALANCE.HOSTS['11'].integrationMeter.maxValue : 0}
+    glitching={bgGlitching}
+  />

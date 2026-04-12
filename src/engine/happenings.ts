@@ -10,9 +10,12 @@ import * as formulas from './formulas'
 import type {
   CountermeasureId,
   DefenseEventId,
+  DefenseEventSeverity,
   GameState,
   GeneratorId,
   HostEchoType,
+  LogEntry,
+  LogTag,
   OfflineEvent,
   OfflineNarrative,
   StatId,
@@ -34,8 +37,30 @@ import {
   hasNextStage as hasNextStageUtil,
   countermeasureDefinitions,
 } from '../lib/game'
+import { pushDefenseToast } from '../stores/gameStore'
 
 // --- HELPERS ---
+
+const EXPIRE_FLAVOR: Partial<Record<DefenseEventId, string>> = {
+  'drought':            'Moisture returns. The network breathes again.',
+  'cold-snap':          'Temperature stabilising. Growth resumes.',
+  'immune-response':    'Host defense subsiding. The mycelium re-extends.',
+  'desiccation-pulse':  'Humidity restored. Hyphae extending.',
+  'fungicide-spray':    'Chemical gradient dissipated. Absorption climbing.',
+  'mass-extinction-pulse': 'Planetary cascade receding. The network holds.',
+}
+
+function buildImpactLine(event: { multiplier: Decimal, clickMultiplier?: Decimal }, suppressionPct: number, durationStr: string): string {
+  if (event.clickMultiplier && event.clickMultiplier.lt(1)) {
+    const clickPct = Math.round((1 - event.clickMultiplier.toNumber()) * 100)
+    return `PASSIVE -${suppressionPct}% / CLICK -${clickPct}% for ${durationStr}`
+  }
+  return `PASSIVE -${suppressionPct}% for ${durationStr}`
+}
+
+function getExpireFlavor(eventId: DefenseEventId): string {
+  return EXPIRE_FLAVOR[eventId] ?? 'Threat expired. Network stabilising.'
+}
 
 function clampLog(log: string[]): string[] {
   return log.slice(-BALANCE.LOG_LIMIT)
@@ -52,6 +77,26 @@ function appendLog(log: string[], message: string): string[] {
 function appendLogs(log: string[], messages: string[]): string[] {
   if (messages.length === 0) return log
   return clampLog([...log, ...messages.map(createLogEntry)])
+}
+
+let _logCounter = 0
+
+function addStructuredLog(
+  state: GameState,
+  tag: LogTag,
+  text: string
+): GameState {
+  const entry: LogEntry = {
+    id: `log_${++_logCounter}`,
+    tag,
+    text,
+    timestamp: Date.now(),
+  }
+  return {
+    ...state,
+    structuredLog: [entry, ...state.structuredLog].slice(0, BALANCE.LOG_LIMIT),
+    log: [text, ...state.log].slice(0, BALANCE.LOG_LIMIT),
+  }
 }
 
 function formatEchoBonus(bonus: { type: string; value: number }): string {
@@ -1168,50 +1213,39 @@ export function recalculateDerivedState(state: GameState): GameState {
 }
 
 export function maybeAppendMilestoneLog(previous: GameState, next: GameState): GameState {
-  const messages: string[] = []
-
   if (previous.generators['hyphae-strand'].owned === 0 && next.generators['hyphae-strand'].owned > 0) {
-    messages.push(createLogEntry('Hyphal thread established. Passive absorption initiated.'))
+    next = addStructuredLog(next, 'PASSIVE', 'Hyphal threads breach the eastern tributary. The sediment does not resist.')
   }
 
   if (!previous.upgrades['chitinous-reinforcement'] && next.upgrades['chitinous-reinforcement']) {
-    messages.push(createLogEntry('Cell walls thicken. Tier 1 absorption sharpens slightly.'))
+    next = addStructuredLog(next, 'SYSTEM', 'Cell walls thicken. Tier 1 absorption sharpens slightly.')
   }
 
   if (!previous.upgrades['neural-propagation'] && next.upgrades['neural-propagation']) {
-    messages.push(createLogEntry(
-      'Neural propagation integrated. Manual strikes carry the weight of the network.'
-    ))
+    next = addStructuredLog(next, 'SYSTEM', 'Neural propagation integrated. Manual strikes carry the weight of the network.')
   }
 
   if (!previous.upgrades['terminus-strike'] && next.upgrades['terminus-strike']) {
-    messages.push(createLogEntry(
-      'Terminus Strike online. Each absorption pulse collapses continental tissue.'
-    ))
+    next = addStructuredLog(next, 'SYSTEM', 'Terminus Strike online. Each absorption pulse collapses continental tissue.')
   }
 
   if (!previous.hostCompleted && next.hostCompleted) {
-    messages.push(createLogEntry(`${previous.hostName} consumption complete. The substrate collapses into us.`))
+    next = addStructuredLog(next, 'STAGE', `${previous.hostName} consumed. The mycelium has learned to move like water.`)
 
     if (previous.currentStage === hostDefinitions.length) {
-      messages.push(createLogEntry('Biosphere collapse confirmed. Spore Release protocol is now available.'))
+      next = addStructuredLog(next, 'STAGE', 'Biosphere collapse confirmed. Spore Release protocol is now available.')
     }
   }
 
   if (formulas.getCompletedHosts(previous) === 0 && formulas.getCompletedHosts(next) >= 1 && next.strain === null) {
-    messages.push(createLogEntry('Genetic threshold reached. Primary strain selection is now available.'))
+    next = addStructuredLog(next, 'STAGE', 'Genetic threshold reached. Primary strain selection is now available.')
   }
 
   if (previous.currentStage < 3 && next.currentStage >= 3) {
-    messages.push(createLogEntry('Cognitive branching intensifies. Skill tree access is now possible.'))
+    next = addStructuredLog(next, 'SYSTEM', 'Cognitive branching intensifies. Skill tree access is now possible.')
   }
 
-  if (messages.length === 0) return next
-
-  return {
-    ...next,
-    log: clampLog([...next.log, ...messages]),
-  }
+  return next
 }
 
 // --- DEFENSE EVENT CREATION ---
@@ -1466,10 +1500,7 @@ function maybeAppendDefenseFlavorLog(state: GameState, deltaMs: number): GameSta
       return state
     }
 
-    return {
-      ...state,
-      log: appendLog(state.log, getRandomItem(definition.creepLogs)),
-    }
+    return addStructuredLog(state, 'DEFENSE', getRandomItem(definition.creepLogs))
   }
 
   if (state.currentStage < BALANCE.DEFENSE_FORECAST_UNLOCK_STAGE) {
@@ -1481,10 +1512,7 @@ function maybeAppendDefenseFlavorLog(state: GameState, deltaMs: number): GameSta
     return state
   }
 
-  return {
-    ...state,
-    log: appendLog(state.log, getRandomItem(ambientDefenseFlavorLogs)),
-  }
+  return addStructuredLog(state, 'PASSIVE', getRandomItem(ambientDefenseFlavorLogs))
 }
 
 function getCountermeasureLogLines(countermeasureId: CountermeasureId | null, eventId: DefenseEventId): string[] {
@@ -1534,9 +1562,9 @@ export function checkVisibilityUnlocks(state: GameState, now = Date.now()): Game
 
   if (!next.visibility.observationLog && next.lifetimeBiomass.gt(0)) {
     next = unlockVisibilityFlag(next, 'observationLog')
+    next = addStructuredLog(next, 'PASSIVE', 'Spore contact confirmed. Substrate viable.')
     next = {
       ...next,
-      log: appendLog(next.log, 'Spore contact confirmed. Substrate viable.'),
       visibility: {
         ...next.visibility,
         generatorPanelUnlockAt: now + 3000,
@@ -1546,9 +1574,9 @@ export function checkVisibilityUnlocks(state: GameState, now = Date.now()): Game
 
   if (!next.visibility.generatorPanel && next.visibility.generatorPanelUnlockAt !== null && now >= next.visibility.generatorPanelUnlockAt) {
     next = unlockVisibilityFlag(next, 'generatorPanel')
+    next = addStructuredLog(next, 'PASSIVE', 'Absorption pathways identified. Network expansion possible.')
     next = {
       ...next,
-      log: appendLog(next.log, 'Absorption pathways identified. Network expansion possible.'),
       visibility: {
         ...next.visibility,
         generatorPanelUnlockAt: null,
@@ -1562,42 +1590,27 @@ export function checkVisibilityUnlocks(state: GameState, now = Date.now()): Game
 
   if (!next.visibility.upgradePanel && upgradeDefinitions.some((upgrade) => isUpgradeRequirementMet(next, upgrade))) {
     next = unlockVisibilityFlag(next, 'upgradePanel')
-    next = {
-      ...next,
-      log: appendLog(next.log, 'Biochemical optimization protocols now available.'),
-    }
+    next = addStructuredLog(next, 'SYSTEM', 'Biochemical optimization protocols now available.')
   }
 
   if (!next.visibility.strainPrompt && formulas.getCompletedHosts(next) >= 1 && next.strain === null) {
     next = unlockVisibilityFlag(next, 'strainPrompt')
-    next = {
-      ...next,
-      log: appendLog(next.log, 'Genetic threshold reached. Primary strain selection required.'),
-    }
+    next = addStructuredLog(next, 'STAGE', 'Genetic threshold reached. Primary strain selection required.')
   }
 
   if (!next.visibility.statsPanel && next.strain !== null) {
     next = unlockVisibilityFlag(next, 'statsPanel')
-    next = {
-      ...next,
-      log: appendLog(next.log, 'Mutation architecture unlocked. Allocate resources to dominant traits.'),
-    }
+    next = addStructuredLog(next, 'SYSTEM', 'Mutation architecture unlocked. Allocate resources to dominant traits.')
   }
 
   if (!next.visibility.skillTree && next.currentStage >= 3) {
     next = unlockVisibilityFlag(next, 'skillTree')
-    next = {
-      ...next,
-      log: appendLog(next.log, 'Enzymatic memory catalogued. Skill expressions now available.'),
-    }
+    next = addStructuredLog(next, 'SYSTEM', 'Enzymatic memory catalogued. Skill expressions now available.')
   }
 
   if (!next.visibility.hostHealthBar && next.currentStage >= 1) {
     next = unlockVisibilityFlag(next, 'hostHealthBar')
-    next = {
-      ...next,
-      log: appendLog(next.log, 'New substrate located. Resistance profile: moderate.'),
-    }
+    next = addStructuredLog(next, 'PASSIVE', 'New substrate located. Resistance profile: moderate.')
   }
 
   if (!next.visibility.stageDisplay && next.currentStage >= 1) {
@@ -1612,27 +1625,16 @@ export function checkVisibilityUnlocks(state: GameState, now = Date.now()): Game
     formulas.isSignalUnlocked(next)
   ) {
     next = unlockVisibilityFlag(next, 'signalPanel')
-    next = {
-      ...next,
-      log: appendLogs(next.log, [
-        'Genetic memory activates dormant signaling pathways.',
-        'Signal represents communication bandwidth across the inherited network.',
-        'It decays if unused. It costs if overspent. Route it with intention.',
-      ]),
-    }
+    next = addStructuredLog(next, 'SYSTEM', 'Genetic memory activates dormant signaling pathways.')
+    next = addStructuredLog(next, 'SYSTEM', 'Signal represents communication bandwidth across the inherited network.')
+    next = addStructuredLog(next, 'SYSTEM', 'It decays if unused. It costs if overspent. Route it with intention.')
   }
 
   if (!next.visibility.prestigeButton && next.currentStage === hostDefinitions.length) {
     next = unlockVisibilityFlag(next, 'prestigeButton')
-    next = {
-      ...next,
-      log: clampLog([
-        ...next.log,
-        createLogEntry('CRITICAL THRESHOLD REACHED. Spore Release protocol available.'),
-        createLogEntry('Warning: This action will dissolve current biomass structure.'),
-        createLogEntry('Genetic Memory will be preserved and encoded into the new spore.'),
-      ]),
-    }
+    next = addStructuredLog(next, 'STAGE', 'CRITICAL THRESHOLD REACHED. Spore Release protocol available.')
+    next = addStructuredLog(next, 'STAGE', 'Warning: This action will dissolve current biomass structure.')
+    next = addStructuredLog(next, 'STAGE', 'Genetic Memory will be preserved and encoded into the new spore.')
   }
 
   if (!next.visibility.useScientificNotation && next.biomass.gte(BALANCE.NOTATION_SHORTHAND_MAX)) {
@@ -1667,19 +1669,19 @@ export function checkVisibilityUnlocks(state: GameState, now = Date.now()): Game
       const guidance = tierIndex === 2
         ? 'Recommendation: Let lower tiers feed it. Rhizomorph output scales with network density.'
         : tierIndex === 3
-          ? 'Recommendation: High-cost assault pathway. It remains effective into early Signal routing.'
-          : 'Recommendation: Prioritize immediately.'
+          ? 'Recommendation: High-cost assault pathway. Remains effective into early Signal routing.'
+          : tierIndex === 8
+            ? 'Recommendation: Atmospheric scale. Substrate dependency is felt more at this tier — maintain your lower network.'
+            : tierIndex === 9
+              ? 'Recommendation: The hydrosphere is threaded. Every ocean current is a vector now.'
+              : tierIndex === 10
+                ? 'Recommendation: Planetary Membrane. The apex of the network. Everything below feeds this.'
+                : 'Recommendation: Prioritize immediately.'
 
       next = unlockGeneratorTier(next, tierIndex)
-      next = {
-        ...next,
-        log: clampLog([
-          ...next.log,
-          createLogEntry(`New absorption pathway detected: ${getGeneratorNameByIndex(tierIndex)}.`),
-          createLogEntry(`Absorption analysis: ${cliffMultiplier}x more efficient than the current tier.`),
-          createLogEntry(guidance),
-        ]),
-      }
+      next = addStructuredLog(next, 'SYSTEM', `New absorption pathway detected: ${getGeneratorNameByIndex(tierIndex)}.`)
+      next = addStructuredLog(next, 'SYSTEM', `Absorption analysis: ${cliffMultiplier}x more efficient than the current tier.`)
+      next = addStructuredLog(next, 'SYSTEM', guidance)
     }
   }
 
@@ -1726,11 +1728,8 @@ export function tick(state: GameState, now = Date.now()): GameState {
     if (_manifestationDrainAccumulator >= MANIFESTATION_DRAIN_INTERVAL_MS) {
       _manifestationDrainAccumulator = 0
       const [msg, ...rest] = next.manifestationQueue
-      next = {
-        ...next,
-        log: appendLog(next.log, msg),
-        manifestationQueue: rest,
-      }
+      next = addStructuredLog(next, 'STAGE', msg)
+      next = { ...next, manifestationQueue: rest }
     }
   } else {
     _manifestationDrainAccumulator = 0
@@ -1790,13 +1789,8 @@ function tickMycorrhizalNetwork(state: GameState, now: number): GameState {
     'passive'
   )
 
-  return {
-    ...next,
-    log: clampLog([
-      ...next.log,
-      createLogEntry(`Mycorrhizal Network pulse. Network resonance yielded ${formulas.formatDecimal(pulseGain)} biomass.`),
-    ]),
-  }
+  next = addStructuredLog(next, 'STRAIN', `Mycorrhizal pulse. ${formulas.formatDecimal(pulseGain)} biomass resonates through the network.`)
+  return next
 }
 
 // --- ENZYME RESERVES & HOST STRESS ---
@@ -1993,13 +1987,11 @@ function tickRivalNetwork(state: GameState, now: number): GameState {
   const hostCorruptionPercent = calculateHostCorruptionFromZones(updatedZones)
 
   if (logs.length > 0) {
-    return {
-      ...state,
-      rivalNetworkState: updatedRivalState,
-      zones: updatedZones,
-      hostCorruptionPercent,
-      log: appendLogs(state.log, logs),
+    let next: GameState = { ...state, rivalNetworkState: updatedRivalState, zones: updatedZones, hostCorruptionPercent }
+    for (const log of logs) {
+      next = addStructuredLog(next, 'DEFENSE', log)
     }
+    return next
   }
 
   return {
@@ -2025,14 +2017,14 @@ function tickIntegrationMeter(state: GameState, deltaMs: number): GameState {
 
   // If not in stage 11, clear integration-related state
   if (state.currentStage !== 11) {
-    const result: GameState = {
+    let next: GameState = {
       ...state,
       integrationPulse: integrationPulse?.isActive ? integrationPulse : null,
     }
     if (state.integrationZones.some(z => !z.isLocked)) {
-      result.log = appendLogs(state.log, ['Integration systems powering down.'])
+      next = addStructuredLog(next, 'STAGE', 'Integration systems powering down. The network contracts.')
     }
-    return result
+    return next
   }
 
   const elapsedSeconds = deltaMs / 1000
@@ -2104,7 +2096,11 @@ function tickIntegrationMeter(state: GameState, deltaMs: number): GameState {
   }
 
   if (logs.length > 0) {
-    result.log = appendLogs(state.log, logs)
+    let next = result
+    for (const log of logs) {
+      next = addStructuredLog(next, 'STAGE', log)
+    }
+    return next
   }
 
   return result
@@ -2116,7 +2112,7 @@ export function useIntegrationPulseAction(state: GameState): GameState {
   const cost = formulas.getIntegrationPulseCost()
   const durationMs = formulas.getIntegrationPulseDurationSeconds() * 1000
 
-  return {
+  return addStructuredLog({
     ...state,
     signal: state.signal - cost,
     integrationPulse: {
@@ -2124,8 +2120,7 @@ export function useIntegrationPulseAction(state: GameState): GameState {
       endsAt: Date.now() + durationMs,
       bpsBonusMultiplier: formulas.getIntegrationPulseBPSMultiplier(),
     },
-    log: appendLog(state.log, 'Integration Pulse activated. Planetary systems aligning.'),
-  }
+  }, 'STRAIN', 'Integration Pulse activated. Planetary systems are aligning.')
 }
 
 // --- SIGNAL ECONOMY ---
@@ -2145,11 +2140,15 @@ function tickCoordinationLinks(state: GameState, deltaMs: number): GameState {
     }]
   })
 
-  return {
-    ...state,
-    activeCoordinationLinks,
-    log: appendLogs(state.log, expiredMessages),
+  if (expiredMessages.length > 0) {
+    let next = { ...state, activeCoordinationLinks }
+    for (const msg of expiredMessages) {
+      next = addStructuredLog(next, 'DEFENSE', msg)
+    }
+    return next
   }
+
+  return { ...state, activeCoordinationLinks }
 }
 
 function tickVulnerabilityWindow(state: GameState, deltaMs: number): GameState {
@@ -2166,11 +2165,10 @@ function tickVulnerabilityWindow(state: GameState, deltaMs: number): GameState {
     }
   }
 
-  return {
+  return addStructuredLog({
     ...state,
     activeVulnerabilityWindow: null,
-    log: appendLog(state.log, 'Host vulnerability window closed. Absorption rate normalised.'),
-  }
+  }, 'DEFENSE', 'Host vulnerability window closed. Absorption rate normalised.')
 }
 
 function tickRivalSuppression(state: GameState, deltaMs: number): GameState {
@@ -2184,12 +2182,11 @@ function tickRivalSuppression(state: GameState, deltaMs: number): GameState {
     }
   }
 
-  return {
+  return addStructuredLog({
     ...state,
     rivalSuppressed: false,
     rivalSuppressionRemainingMs: 0,
-    log: appendLog(state.log, 'Rival suppression window expired. Network monitoring resumed.'),
-  }
+  }, 'DEFENSE', 'Rival suppression window expired. Network monitoring resumed.')
 }
 
 export function tickSignalSystem(state: GameState, deltaMs: number): GameState {
@@ -2226,49 +2223,26 @@ export function tickSignalSystem(state: GameState, deltaMs: number): GameState {
   }
 
   if (signalDecaying && !next._signalDecayLogged) {
-    next = {
-      ...next,
-      _signalDecayLogged: true,
-      log: appendLog(next.log, 'Signal bandwidth at capacity. Excess dissipating.'),
-    }
+    next = addStructuredLog({ ...next, _signalDecayLogged: true }, 'SIGNAL', 'Signal bandwidth at capacity. Excess dissipating.')
   }
   if (!signalDecaying && next._signalDecayLogged) {
-    next = {
-      ...next,
-      _signalDecayLogged: false,
-    }
+    next = { ...next, _signalDecayLogged: false }
   }
 
   const overspent = formulas.isSignalOverspent(next)
-  next = {
-    ...next,
-    signalOverspent: overspent,
-  }
+  next = { ...next, signalOverspent: overspent }
 
   if (overspent && !next._signalOverspentLogged) {
-    next = {
-      ...next,
-      _signalOverspentLogged: true,
-      log: appendLog(next.log, 'Signal critical. Network coordination failing. Biomass production degraded.'),
-    }
+    next = addStructuredLog({ ...next, _signalOverspentLogged: true }, 'SIGNAL', 'Signal critical. Network coordination failing. Biomass production degraded.')
   }
   if (!overspent && next._signalOverspentLogged) {
-    next = {
-      ...next,
-      _signalOverspentLogged: false,
-    }
+    next = { ...next, _signalOverspentLogged: false }
   }
   if (next._wasOverspent && !overspent) {
-    next = {
-      ...next,
-      log: appendLog(next.log, 'Signal restored. Network coordination nominal.'),
-    }
+    next = addStructuredLog(next, 'SIGNAL', 'Signal restored. Network coordination nominal.')
   }
 
-  next = {
-    ...next,
-    _wasOverspent: overspent,
-  }
+  next = { ...next, _wasOverspent: overspent }
 
   next = tickCoordinationLinks(next, deltaMs)
   next = tickVulnerabilityWindow(next, deltaMs)
@@ -2287,16 +2261,13 @@ export function spendSignalCoordinationCommand(
   const targetGenerator = generatorDefinitions[targetTier]
 
   if (state.signal < cost) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Insufficient Signal for coordination command.'),
-    }
+    return addStructuredLog(state, 'SIGNAL', 'Insufficient Signal for coordination command.')
   }
   if (sourceTier === targetTier || !sourceGenerator || !targetGenerator) return state
   if (!state.visibility.generatorTiers[sourceTier] || !state.visibility.generatorTiers[targetTier]) return state
   if (state.generators[sourceGenerator.id].owned <= 0 || state.generators[targetGenerator.id].owned <= 0) return state
 
-  const next = {
+  let next = {
     ...state,
     signal: Math.max(0, state.signal - cost),
     activeCoordinationLinks: [
@@ -2308,11 +2279,10 @@ export function spendSignalCoordinationCommand(
         boostMultiplier: BALANCE.SIGNAL.COORDINATION_BOOST_MULTIPLIER,
       },
     ],
-    log: appendLogs(state.log, [
-      `Coordination command issued. Tier ${sourceTier + 1} -> Tier ${targetTier + 1}.`,
-      `Production boost: ${BALANCE.SIGNAL.COORDINATION_BOOST_MULTIPLIER}x for ${BALANCE.SIGNAL.COORDINATION_DURATION_MS / 1000}s.`,
-    ]),
   }
+  next = addStructuredLog(next, 'DEFENSE', `Coordination command issued. Tier ${sourceTier + 1} -> Tier ${targetTier + 1}.`)
+  next = addStructuredLog(next, 'DEFENSE', `Production boost: ${BALANCE.SIGNAL.COORDINATION_BOOST_MULTIPLIER}x for ${BALANCE.SIGNAL.COORDINATION_DURATION_MS / 1000}s.`)
+  return next
 
   return recalculateDerivedState(next)
 }
@@ -2321,61 +2291,47 @@ export function spendSignalVulnerabilityWindow(state: GameState): GameState {
   const cost = BALANCE.SIGNAL.COST_VULNERABILITY_WINDOW
 
   if (state.signal < cost) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Insufficient Signal for vulnerability analysis.'),
-    }
+    return addStructuredLog(state, 'SIGNAL', 'Insufficient Signal for vulnerability analysis.')
   }
   if (state.activeVulnerabilityWindow || !formulas.isSignalUnlocked(state)) {
     if (state.activeVulnerabilityWindow) {
-      return {
-        ...state,
-        log: appendLog(state.log, 'Vulnerability window already active.'),
-      }
+      return addStructuredLog(state, 'DEFENSE', 'Vulnerability window already active.')
     }
     return state
   }
 
-  return recalculateDerivedState({
+  let next = recalculateDerivedState({
     ...state,
     signal: Math.max(0, state.signal - cost),
     activeVulnerabilityWindow: {
       remainingMs: BALANCE.SIGNAL.VULNERABILITY_DURATION_MS,
       damageMultiplier: BALANCE.SIGNAL.VULNERABILITY_DAMAGE_MULT,
     },
-    log: appendLogs(state.log, [
-      'Host vulnerability window open. Enzymatic analysis complete.',
-      `Absorption efficiency: ${BALANCE.SIGNAL.VULNERABILITY_DAMAGE_MULT}x for ${BALANCE.SIGNAL.VULNERABILITY_DURATION_MS / 1000}s.`,
-    ]),
   })
+  next = addStructuredLog(next, 'DEFENSE', 'Host vulnerability window open. Enzymatic analysis complete.')
+  next = addStructuredLog(next, 'DEFENSE', `Absorption efficiency: ${BALANCE.SIGNAL.VULNERABILITY_DAMAGE_MULT}x for ${BALANCE.SIGNAL.VULNERABILITY_DURATION_MS / 1000}s.`)
+  return next
 }
 
 export function spendSignalRivalSuppression(state: GameState): GameState {
   const cost = BALANCE.SIGNAL.COST_RIVAL_SUPPRESSION
 
   if (state.signal < cost) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Insufficient Signal for suppression protocol.'),
-    }
+    return addStructuredLog(state, 'SIGNAL', 'Insufficient Signal for suppression protocol.')
   }
   if (state.rivalSuppressed) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Rival suppression already active.'),
-    }
+    return addStructuredLog(state, 'DEFENSE', 'Rival suppression already active.')
   }
 
-  return recalculateDerivedState({
+  let next = recalculateDerivedState({
     ...state,
     signal: Math.max(0, state.signal - cost),
     rivalSuppressed: true,
     rivalSuppressionRemainingMs: BALANCE.SIGNAL.SUPPRESSION_COOLDOWN_OVERRIDE_MS,
-    log: appendLogs(state.log, [
-      'Rival suppression protocol active.',
-      `Network perimeter signals saturated. Rival spawn window: ${BALANCE.SIGNAL.SUPPRESSION_COOLDOWN_OVERRIDE_MS / 60000} minutes.`,
-    ]),
   })
+  next = addStructuredLog(next, 'DEFENSE', 'Rival suppression protocol active.')
+  next = addStructuredLog(next, 'DEFENSE', `Network perimeter signals saturated. Rival spawn window: ${BALANCE.SIGNAL.SUPPRESSION_COOLDOWN_OVERRIDE_MS / 60000} minutes.`)
+  return next
 }
 
 export function spendSignalNetworkIsolation(state: GameState): GameState {
@@ -2430,25 +2386,16 @@ export function useActiveAttackAction(state: GameState, zoneId?: string): GameSt
   }
 
   if (state.activeAttack?.isActive && state.activeAttack.endsAt > Date.now()) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Active attack already in progress. Wait for current attack to complete.'),
-    }
+    return addStructuredLog(state, 'DEFENSE', 'Active attack already in progress. Wait for current attack to complete.')
   }
 
   if (state.activeAttack?.cooldownEndAt && state.activeAttack.cooldownEndAt > Date.now()) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Active attack on cooldown. Wait before deploying again.'),
-    }
+    return addStructuredLog(state, 'DEFENSE', 'Active attack on cooldown. Wait before deploying again.')
   }
 
   const cost = formulas.getActiveAttackCost(state, zoneId)
   if (state.enzymeReserves < cost) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Insufficient Enzyme Reserves for active attack.'),
-    }
+    return addStructuredLog(state, 'DEFENSE', 'Insufficient Enzyme Reserves for active attack.')
   }
 
   const stressIncrement = formulas.getActiveAttackStressIncrement(state)
@@ -2479,7 +2426,7 @@ export function useActiveAttackAction(state: GameState, zoneId?: string): GameSt
     }
   }
 
-  return recalculateDerivedState({
+  let next = recalculateDerivedState({
     ...state,
     enzymeReserves: state.enzymeReserves - cost,
     hostStress: {
@@ -2494,8 +2441,11 @@ export function useActiveAttackAction(state: GameState, zoneId?: string): GameSt
       cooldownEndAt: Date.now() + cooldownMs,
     },
     zones: nextZones,
-    log: appendLogs(state.log, logs),
   })
+  for (const log of logs) {
+    next = addStructuredLog(next, 'CLICK', log)
+  }
+  return next
 }
 
 // --- GRINDABLE EVENTS (HOST 04+) ---
@@ -2530,27 +2480,20 @@ function tickGrindEvent(state: GameState, deltaMs: number): GameState {
 
 export function startGrindEventSession(state: GameState): GameState {
   if (state.currentStage < 4) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Grind events unlock at Host 04.'),
-    }
+    return addStructuredLog(state, 'SYSTEM', 'Grind events unlock at Host 04.')
   }
 
   if (state.activeGrindSession) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Grind session already active.'),
-    }
+    return addStructuredLog(state, 'SYSTEM', 'Grind session already active.')
   }
 
-  return {
+  return addStructuredLog({
     ...state,
     activeGrindSession: {
       eventCount: 0,
       windowStartTime: Date.now(),
     },
-    log: appendLog(state.log, 'Grind session initiated. Suppression attempts available.'),
-  }
+  }, 'SYSTEM', 'Grind session initiated. Suppression attempts available.')
 }
 
 export function triggerGrindEvent(state: GameState): GameState {
@@ -2559,10 +2502,7 @@ export function triggerGrindEvent(state: GameState): GameState {
   }
 
   if (!state.activeGrindSession) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'Start a grind session first.'),
-    }
+    return addStructuredLog(state, 'SYSTEM', 'Start a grind session first.')
   }
 
   const grindableEventIds = Object.values(defenseFlavorDefinitions)
@@ -2570,10 +2510,7 @@ export function triggerGrindEvent(state: GameState): GameState {
     .map((event) => event.id)
 
   if (grindableEventIds.length === 0) {
-    return {
-      ...state,
-      log: appendLog(state.log, 'No grindable events available at this host.'),
-    }
+    return addStructuredLog(state, 'SYSTEM', 'No grindable events available at this host.')
   }
 
   const selectedEventId = grindableEventIds[Math.floor(Math.random() * grindableEventIds.length)]
@@ -2595,7 +2532,7 @@ export function triggerGrindEvent(state: GameState): GameState {
     logs.push(`Grind failed. ${definition.name} fully persisted. No enzyme reward.`)
   }
 
-  return recalculateDerivedState({
+  let next = recalculateDerivedState({
     ...state,
     activeGrindSession: {
       eventCount: state.activeGrindSession.eventCount + 1,
@@ -2603,8 +2540,11 @@ export function triggerGrindEvent(state: GameState): GameState {
     },
     runGrindEventCount: runEventCount + 1,
     enzymeReserves: nextEnzymeReserves,
-    log: appendLogs(state.log, logs),
   })
+  for (const log of logs) {
+    next = addStructuredLog(next, 'DEFENSE', log)
+  }
+  return next
 }
 
 // --- GENERATORS ---
@@ -2627,13 +2567,10 @@ export function buyGeneratorAction(state: GameState, generatorId: GeneratorId): 
           owned: state.generators[generatorId].owned + quantity,
         },
       },
-      log: clampLog([
-        ...state.log,
-        createLogEntry(`${definition.name} propagated x${quantity}. Passive spread deepens.`),
-      ]),
     },
     cost
   )
+  return checkVisibilityUnlocks(recalculateDerivedState(addStructuredLog(next, 'PASSIVE', `${definition.name} propagated x${quantity}. Passive spread deepens.`)))
 
   return checkVisibilityUnlocks(recalculateDerivedState(next))
 }
@@ -2948,13 +2885,7 @@ export function equipCountermeasureAction(state: GameState, countermeasureId: Co
   if (state.equippedCountermeasure === countermeasureId) return state
 
   if (state.activeDefenseEvents.length > 0) {
-    return {
-      ...state,
-      log: appendLog(
-        state.log,
-        'Protocol switch denied. A defense event is active. Wait for it to resolve.'
-      ),
-    }
+    return addStructuredLog(state, 'DEFENSE', 'Protocol switch denied. A defense event is active. Wait for it to resolve.')
   }
 
   const definition = countermeasureDefinitions.find((c) => c.id === countermeasureId)
@@ -2968,11 +2899,10 @@ export function equipCountermeasureAction(state: GameState, countermeasureId: Co
     ? `Protocol switched: ${previousName} → ${definition.name}. ${definition.flavorLine}`
     : `${definition.name} protocol engaged. ${definition.flavorLine}`
 
-  return {
+  return addStructuredLog({
     ...state,
     equippedCountermeasure: countermeasureId,
-    log: appendLog(state.log, logLine),
-  }
+  }, 'DEFENSE', logLine)
 }
 
 export function setProactiveCountermeasureAction(
@@ -2992,13 +2922,12 @@ export function setProactiveCountermeasureAction(
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ')
 
-  return {
+  return addStructuredLog({
     ...state,
     signal: state.signal - BALANCE.PROACTIVE_COUNTERMEASURES.signalCost,
     proactiveCountermeasure: countermeasureId,
     proactiveCountermeasureEndAt: endAt,
-    log: appendLog(state.log, `${name} countermeasures deployed for 60 seconds. Network-wide protection active.`),
-  }
+  }, 'DEFENSE', `${name} countermeasures deployed for 60 seconds. Network-wide protection active.`)
 }
 
 export function scanDefenseEventAction(state: GameState): GameState {
@@ -3010,17 +2939,13 @@ export function scanDefenseEventAction(state: GameState): GameState {
   const scannedEventId = state.nextDefenseEventId
   const definition = defenseFlavorDefinitions[scannedEventId]
 
-  return {
+  return addStructuredLog({
     ...state,
     signal: state.signal - BALANCE.PROACTIVE_COUNTERMEASURES.signalCost,
     tier2ScanActive: true,
     tier2ScannedEventId: scannedEventId,
     tier2PreemptiveSet: false,
-    log: appendLog(
-      state.log,
-      `Tier 2 scan complete. Next threat identified: ${definition?.name ?? scannedEventId}.`
-    ),
-  }
+  }, 'DEFENSE', `Tier 2 scan complete. Next threat identified: ${definition?.name ?? scannedEventId}.`)
 }
 
 export function setPreemptiveCountermeasureAction(state: GameState): GameState {
@@ -3028,12 +2953,11 @@ export function setPreemptiveCountermeasureAction(state: GameState): GameState {
   if (state.tier2PreemptiveSet) return state
   if (state.signal < BALANCE.PROACTIVE_COUNTERMEASURES.signalCost) return state
 
-  return {
+  return addStructuredLog({
     ...state,
     signal: state.signal - BALANCE.PROACTIVE_COUNTERMEASURES.signalCost,
     tier2PreemptiveSet: true,
-    log: appendLog(state.log, `Preemptive countermeasure set. ${state.tier2ScannedEventId} will be met with enhanced resistance.`),
-  }
+  }, 'DEFENSE', `Preemptive countermeasure set. ${state.tier2ScannedEventId} will be met with enhanced resistance.`)
 }
 
 // --- DEFENSE EVENTS ---
@@ -3056,6 +2980,17 @@ function expireDefenseEvents(state: GameState, now: number): GameState {
     ]),
   }
 
+  for (const event of expiredEvents) {
+    pushDefenseToast({
+      type: 'expire',
+      eventName: event.name,
+      severity: 'low',
+      impactLine: 'Production restored. Network stabilising.',
+      flavorText: getExpireFlavor(event.id),
+    })
+    next = addStructuredLog(next, 'DEFENSE', getExpireFlavor(event.id))
+  }
+
   // Decomposition Loop - Saprophyte signature ability with Resilience scaling
   if (expiredEvents.length > 0 && state.strain === 'saprophyte' && state.biomassPerSecond.gt(0)) {
     let totalRecovered = new Decimal(0)
@@ -3074,14 +3009,10 @@ function expireDefenseEvents(state: GameState, now: number): GameState {
     }
 
     if (totalRecovered.gt(0)) {
-      next = {
+      next = addStructuredLog({
         ...next,
         biomass: next.biomass.add(totalRecovered),
-        log: appendLog(
-          next.log,
-          `Decomposition Loop: +${formulas.formatDecimal(totalRecovered)} Biomass recovered (${Math.round(conversionRate * 100)}% conversion rate).`
-        ),
-      }
+      }, 'STRAIN', `Decomposition Loop: +${formulas.formatDecimal(totalRecovered)} Biomass recovered (${Math.round(conversionRate * 100)}% conversion rate).`)
     }
   }
 
@@ -3192,6 +3123,22 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
     ]),
   }
 
+  const suppressionPct = Math.round((1 - mitigatedEvent.multiplier.toNumber()) * 100)
+  const durationMs = mitigatedEvent.endsAt - now
+  const m = Math.floor(durationMs / 60000)
+  const s = Math.round((durationMs % 60000) / 1000)
+  const durationStr = `${m}:${s.toString().padStart(2, '0')}`
+  const severity = formulas.getDefenseEventSeverity(mitigatedEvent.multiplier.toNumber())
+  const impactLine = buildImpactLine(mitigatedEvent, suppressionPct, durationStr)
+  pushDefenseToast({
+    type: 'start',
+    eventName: mitigatedEvent.name,
+    severity,
+    impactLine,
+    flavorText: defenseFlavorDefinitions[mitigatedEvent.id]?.triggerLogs[0] ?? '',
+  })
+  resultState = addStructuredLog(resultState, 'DEFENSE', `${mitigatedEvent.name} — passive -${suppressionPct}%. Duration: ${durationStr}.`)
+
   const immediateHitEventId = rollImmediateHitEventId(state)
   if (immediateHitEventId && !state.activeDefenseEvents.some((existing) => existing.id === immediateHitEventId)) {
     const immediateEvent = createDefenseEvent(state, now, immediateHitEventId)
@@ -3205,6 +3152,21 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
           ...definition.triggerLogs.map(createLogEntry),
         ]),
       }
+      const immSuppressionPct = Math.round((1 - immediateEvent.multiplier.toNumber()) * 100)
+      const immDurationMs = immediateEvent.endsAt - now
+      const immM = Math.floor(immDurationMs / 60000)
+      const immS = Math.round((immDurationMs % 60000) / 1000)
+      const immDurationStr = `${immM}:${immS.toString().padStart(2, '0')}`
+      const immSeverity = formulas.getDefenseEventSeverity(immediateEvent.multiplier.toNumber())
+      const immImpactLine = buildImpactLine(immediateEvent, immSuppressionPct, immDurationStr)
+      pushDefenseToast({
+        type: 'start',
+        eventName: immediateEvent.name,
+        severity: immSeverity,
+        impactLine: immImpactLine,
+        flavorText: definition.triggerLogs[0] ?? '',
+      })
+      resultState = addStructuredLog(resultState, 'DEFENSE', `${immediateEvent.name} — passive -${immSuppressionPct}%. Duration: ${immDurationStr}.`)
     }
   }
 
@@ -3240,6 +3202,21 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
               createLogEntry(`EXTINCTION EVENT: Integration meter regresses by ${meterRegression}%. Current meter: ${newMeter.toFixed(1)}%`),
             ]),
           }
+          const extSuppressionPct = Math.round((1 - extinctionEvent.multiplier.toNumber()) * 100)
+          const extDurationMs = extinctionEvent.endsAt - now
+          const extM = Math.floor(extDurationMs / 60000)
+          const extS = Math.round((extDurationMs % 60000) / 1000)
+          const extDurationStr = `${extM}:${extS.toString().padStart(2, '0')}`
+          const extSeverity = formulas.getDefenseEventSeverity(extinctionEvent.multiplier.toNumber())
+          const extImpactLine = buildImpactLine(extinctionEvent, extSuppressionPct, extDurationStr)
+          pushDefenseToast({
+            type: 'start',
+            eventName: extinctionEvent.name,
+            severity: extSeverity,
+            impactLine: extImpactLine,
+            flavorText: extinctionDef.triggerLogs[0] ?? '',
+          })
+          resultState = addStructuredLog(resultState, 'DEFENSE', `${extinctionEvent.name} — passive -${extSuppressionPct}%. Duration: ${extDurationStr}.`)
         }
       }
     }
@@ -3278,6 +3255,21 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
                 createLogEntry(`Multi-front assault! ${definition.name} strikes from another angle.`),
               ]),
             }
+            const multiSuppressionPct = Math.round((1 - mitigatedExtraEvent.multiplier.toNumber()) * 100)
+            const multiDurationMs = mitigatedExtraEvent.endsAt - now
+            const multiM = Math.floor(multiDurationMs / 60000)
+            const multiS = Math.round((multiDurationMs % 60000) / 1000)
+            const multiDurationStr = `${multiM}:${multiS.toString().padStart(2, '0')}`
+            const multiSeverity = formulas.getDefenseEventSeverity(mitigatedExtraEvent.multiplier.toNumber())
+            const multiImpactLine = buildImpactLine(mitigatedExtraEvent, multiSuppressionPct, multiDurationStr)
+            pushDefenseToast({
+              type: 'start',
+              eventName: mitigatedExtraEvent.name,
+              severity: multiSeverity,
+              impactLine: multiImpactLine,
+              flavorText: definition.triggerLogs[0] ?? '',
+            })
+            resultState = addStructuredLog(resultState, 'DEFENSE', `${mitigatedExtraEvent.name} — passive -${multiSuppressionPct}%. Duration: ${multiDurationStr}.`)
           }
         }
       }
@@ -3787,6 +3779,21 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
     },
     unlockedSkills: (raw.unlockedSkills ?? []) as GameState['unlockedSkills'],
     clickCount: raw.clickCount ?? base.clickCount,
+    // Migration: rename old tier-8 'planetary-membrane' to 'lithospheric-web'
+    // and ensure new generator types exist in loaded state
+    ...(() => {
+      const loadedGens = raw.generators ?? {}
+      if (loadedGens['planetary-membrane'] && !loadedGens['lithospheric-web']) {
+        loadedGens['lithospheric-web'] = loadedGens['planetary-membrane']
+        loadedGens['planetary-membrane'] = { owned: 0 }
+      }
+      for (const id of ['atmospheric-drift', 'oceanic-threadwork'] as const) {
+        if (!loadedGens[id]) {
+          loadedGens[id] = { owned: 0 }
+        }
+      }
+      return {}
+    })(),
     generators: {
       ...base.generators,
       ...(raw.generators ?? {}),
@@ -3817,6 +3824,7 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
     lastSaveTime: raw.lastSaveTime ?? now,
     lastTickTime: raw.lastTickTime ?? now,
     log: raw.log ?? base.log,
+    structuredLog: raw.structuredLog ?? base.structuredLog,
     visibility: {
       ...base.visibility,
       ...(raw.visibility ?? {}),
