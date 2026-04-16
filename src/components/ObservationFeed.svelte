@@ -34,7 +34,6 @@
     <div
       class="entry"
       class:newest={fade && i === 0}
-      style="opacity: {getOpacity(i)}"
     >
       <span class="ts">{formatTime(entry.timestamp)}</span>
       <span
@@ -103,7 +102,7 @@
   }
 
   .text {
-    font-size: 11px;
+    font-size: 14px;
     color: #608048;
     letter-spacing: 0.04em;
     line-height: 1.45;

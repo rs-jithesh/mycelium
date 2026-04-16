@@ -39,6 +39,8 @@ import {
 } from '../lib/game'
 import { pushDefenseToast } from '../stores/gameStore'
 
+const DEFENSE_FORECAST_DELAY_MS = 10_000
+
 // --- HELPERS ---
 
 const EXPIRE_FLAVOR: Partial<Record<DefenseEventId, string>> = {
@@ -1333,10 +1335,12 @@ function createStandardDefenseEvent(eventId: Exclude<DefenseEventId, 'drought' |
   }
 }
 
-function createDefenseEvent(state: GameState, now: number, eventId: DefenseEventId) {
+function createDefenseEvent(state: GameState, now: number, eventId: DefenseEventId, startsAt: number) {
+  let event: ReturnType<typeof createStandardDefenseEvent> | ReturnType<typeof createDroughtEvent> | ReturnType<typeof createColdSnapEvent> | ReturnType<typeof createSporeCompetitionEvent> | ReturnType<typeof createImmuneResponseEvent> | ReturnType<typeof createBeetleDisruptionEvent>
   switch (eventId) {
     case 'drought':
-      return createDroughtEvent(now)
+      event = createDroughtEvent(now)
+      break
     case 'desiccation-pulse':
     case 'antifungal-exudates':
     case 'microbial-rivalry':
@@ -1349,17 +1353,23 @@ function createDefenseEvent(state: GameState, now: number, eventId: DefenseEvent
     case 'spore-predation':
     case 'thermal-stratification':
     case 'ecosystem-feedback':
-      return createStandardDefenseEvent(eventId, now)
+      event = createStandardDefenseEvent(eventId, now)
+      break
     case 'cold-snap':
-      return createColdSnapEvent(now)
+      event = createColdSnapEvent(now)
+      break
     case 'spore-competition':
-      return createSporeCompetitionEvent(now)
+      event = createSporeCompetitionEvent(now)
+      break
     case 'immune-response':
-      return createImmuneResponseEvent(now)
+      event = createImmuneResponseEvent(now)
+      break
     case 'beetle-disruption':
     default:
-      return createBeetleDisruptionEvent(state, now)
+      event = createBeetleDisruptionEvent(state, now)
   }
+  if (!event) return null
+  return { ...event, startsAt }
 }
 
 function applyCountermeasureToEvent(state: GameState, event: NonNullable<ReturnType<typeof createDefenseEvent>>, now: number): {
@@ -1695,6 +1705,7 @@ let _manifestationDrainAccumulator = 0
 
 export function tick(state: GameState, now = Date.now()): GameState {
   let next = expireDefenseEvents(state, now)
+  next = activatePendingDefenseEvents(next, now)
   next = tryTriggerDefenseEvent(next, now)
 
   const deltaMs = Math.max(0, now - state.lastTickTime)
@@ -2575,7 +2586,7 @@ export function buyGeneratorAction(state: GameState, generatorId: GeneratorId): 
   return checkVisibilityUnlocks(recalculateDerivedState(next))
 }
 
-function getAffordableQuantity(
+export function getAffordableQuantity(
   state: GameState,
   generatorId: GeneratorId,
   desiredAmount: 1 | 10 | 100 | 'MAX'
@@ -2772,6 +2783,7 @@ export function advanceStageAction(state: GameState): GameState {
     hostMaxHealth: nextHost.health,
     hostCompleted: false,
     activeDefenseEvents: [],
+    pendingDefenseEvents: [],
     nextDefenseEventId: null,
     activeParasiteDefenseBurstMs: 0,
     _currentHostClickDamage: new Decimal(0),
@@ -3019,6 +3031,38 @@ function expireDefenseEvents(state: GameState, now: number): GameState {
   return recalculateDerivedState(next)
 }
 
+function activatePendingDefenseEvents(state: GameState, now: number): GameState {
+  const toActivate = state.pendingDefenseEvents.filter((event) => event.startsAt <= now)
+
+  if (toActivate.length === 0) return state
+
+  let next: GameState = {
+    ...state,
+    pendingDefenseEvents: state.pendingDefenseEvents.filter((event) => event.startsAt > now),
+    activeDefenseEvents: [...state.activeDefenseEvents, ...toActivate],
+  }
+
+  for (const event of toActivate) {
+    const suppressionPct = Math.round((1 - event.multiplier.toNumber()) * 100)
+    const durationMs = event.endsAt - event.startsAt
+    const m = Math.floor(durationMs / 60000)
+    const s = Math.round((durationMs % 60000) / 1000)
+    const durationStr = `${m}:${s.toString().padStart(2, '0')}`
+    const severity = formulas.getDefenseEventSeverity(event.multiplier.toNumber())
+    const impactLine = buildImpactLine(event, suppressionPct, durationStr)
+    pushDefenseToast({
+      type: 'start',
+      eventName: event.name,
+      severity,
+      impactLine,
+      flavorText: defenseFlavorDefinitions[event.id]?.triggerLogs[0] ?? '',
+    })
+    next = addStructuredLog(next, 'DEFENSE', `${event.name} — NOW ACTIVE. Passive -${suppressionPct}%. Duration: ${durationStr}.`)
+  }
+
+  return next
+}
+
 function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
   if (state.hostCompleted || now < state.nextDefenseCheckAt) return state
 
@@ -3071,7 +3115,8 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
   const selectedEventId = availableEventIds.includes(eventId)
     ? eventId
     : (availableEventIds.length > 0 ? getRandomItem(availableEventIds) : eventId)
-  const event = createDefenseEvent(state, now, selectedEventId)
+  const eventStartsAt = now + DEFENSE_FORECAST_DELAY_MS
+  const event = createDefenseEvent(state, now, selectedEventId, eventStartsAt)
   if (!event) {
     return {
       ...state,
@@ -3096,7 +3141,7 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
 
   let resultState: GameState = {
     ...state,
-    activeDefenseEvents: [...state.activeDefenseEvents, mitigatedEvent],
+    pendingDefenseEvents: [...state.pendingDefenseEvents, mitigatedEvent],
     enzymeReserves: state.equippedCountermeasure !== null
       ? Math.min(formulas.getEnzymeReserveCap(state), state.enzymeReserves + enzymeReward)
       : state.enzymeReserves,
@@ -3131,17 +3176,17 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
   const severity = formulas.getDefenseEventSeverity(mitigatedEvent.multiplier.toNumber())
   const impactLine = buildImpactLine(mitigatedEvent, suppressionPct, durationStr)
   pushDefenseToast({
-    type: 'start',
+    type: 'forecast',
     eventName: mitigatedEvent.name,
     severity,
     impactLine,
     flavorText: defenseFlavorDefinitions[mitigatedEvent.id]?.triggerLogs[0] ?? '',
   })
-  resultState = addStructuredLog(resultState, 'DEFENSE', `${mitigatedEvent.name} — passive -${suppressionPct}%. Duration: ${durationStr}.`)
+  resultState = addStructuredLog(resultState, 'DEFENSE', `${mitigatedEvent.name} — INCOMING in 10s. Passive -${suppressionPct}%. Duration: ${durationStr}.`)
 
   const immediateHitEventId = rollImmediateHitEventId(state)
   if (immediateHitEventId && !state.activeDefenseEvents.some((existing) => existing.id === immediateHitEventId)) {
-    const immediateEvent = createDefenseEvent(state, now, immediateHitEventId)
+    const immediateEvent = createDefenseEvent(state, now, immediateHitEventId, now)
     if (immediateEvent) {
       const definition = defenseFlavorDefinitions[immediateHitEventId]
       resultState = {
@@ -3182,7 +3227,7 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
       )
       if (availableExtinctionIds.length > 0) {
         const extinctionEventId = getRandomItem(availableExtinctionIds)
-        const extinctionEvent = createDefenseEvent(resultState, now, extinctionEventId)
+        const extinctionEvent = createDefenseEvent(resultState, now, extinctionEventId, now)
         if (extinctionEvent) {
           const extinctionDef = defenseFlavorDefinitions[extinctionEventId]
           let meterRegression = 0
@@ -3238,7 +3283,7 @@ function tryTriggerDefenseEvent(state: GameState, now: number): GameState {
         const randomIndex = Math.floor(Math.random() * availableEventIds.length)
         const extraEventId = availableEventIds.splice(randomIndex, 1)[0]
         if (extraEventId) {
-          const extraEvent = createDefenseEvent(resultState, now, extraEventId)
+          const extraEvent = createDefenseEvent(resultState, now, extraEventId, now)
           if (extraEvent) {
             const { event: mitigatedExtraEvent, enzymeReward: extraEnzymeReward } = applyCountermeasureToEvent(resultState, extraEvent, now)
             const definition = defenseFlavorDefinitions[extraEventId]
@@ -3417,6 +3462,19 @@ export function loadStateWithNarrative(): { state: GameState; narrative: Offline
   try {
     const parsed = JSON.parse(raw) as Partial<SerializedState>
     const hydrated = normalizeLoadedState(parsed)
+    let maxLogId = 0
+    for (const entry of hydrated.structuredLog) {
+      if (entry && entry.id) {
+        const match = String(entry.id).match(/^log_(\d+)$/)
+        if (match && match[1]) {
+          const num = parseInt(match[1], 10)
+          if (num > maxLogId) maxLogId = num
+        }
+      }
+    }
+    if (maxLogId > 0) {
+      _logCounter = Math.max(_logCounter, maxLogId)
+    }
     const now = Date.now()
     const offlineMs = getOfflineNarrativeDurationMs(hydrated, now)
     const offlineGain = formulas.calculateOfflineGains(hydrated, now)
@@ -3493,6 +3551,20 @@ interface SerializedState {
     id: string
     name: string
     description: string
+    startsAt: number
+    endsAt: number
+    multiplier: string
+    clickMultiplier?: string
+    disabledGeneratorId?: string
+    tier?: 1 | 2
+    isGrindable?: boolean
+    chargeCost?: number
+  }>
+  pendingDefenseEvents: Array<{
+    id: string
+    name: string
+    description: string
+    startsAt: number
     endsAt: number
     multiplier: string
     clickMultiplier?: string
@@ -3515,6 +3587,7 @@ interface SerializedState {
   lastSaveTime: number
   lastTickTime: number
   log: string[]
+  structuredLog: import('../lib/game').LogEntry[]
   visibility?: GameState['visibility']
   hostEchoes: Record<number, HostEchoType>
   _currentHostClickDamage: string
@@ -3636,6 +3709,11 @@ function serialize(s: GameState): SerializedState {
       multiplier: event.multiplier.toString(),
       clickMultiplier: event.clickMultiplier?.toString(),
     })),
+    pendingDefenseEvents: s.pendingDefenseEvents.map((event) => ({
+      ...event,
+      multiplier: event.multiplier.toString(),
+      clickMultiplier: event.clickMultiplier?.toString(),
+    })),
     nextDefenseEventId: s.nextDefenseEventId,
     equippedCountermeasure: s.equippedCountermeasure,
     activeParasiteDefenseBurstMs: s.activeParasiteDefenseBurstMs,
@@ -3650,6 +3728,7 @@ function serialize(s: GameState): SerializedState {
     lastSaveTime: s.lastSaveTime,
     lastTickTime: s.lastTickTime,
     log: s.log,
+    structuredLog: s.structuredLog,
     visibility: s.visibility,
     hostEchoes: s.hostEchoes,
     _currentHostClickDamage: s._currentHostClickDamage.toString(),
@@ -3809,6 +3888,15 @@ function normalizeLoadedState(raw: Partial<SerializedState>): GameState {
       multiplier: toDecimal(event.multiplier),
       clickMultiplier: event.clickMultiplier ? toDecimal(event.clickMultiplier) : undefined,
       disabledGeneratorId: event.disabledGeneratorId as import('../lib/game').GeneratorId | undefined,
+      startsAt: event.startsAt ?? now,
+    })),
+    pendingDefenseEvents: (raw.pendingDefenseEvents ?? []).map((event) => ({
+      ...event,
+      id: event.id as import('../lib/game').DefenseEventId,
+      multiplier: toDecimal(event.multiplier),
+      clickMultiplier: event.clickMultiplier ? toDecimal(event.clickMultiplier) : undefined,
+      disabledGeneratorId: event.disabledGeneratorId as import('../lib/game').GeneratorId | undefined,
+      startsAt: event.startsAt ?? now,
     })),
     nextDefenseEventId: raw.nextDefenseEventId ?? base.nextDefenseEventId,
     equippedCountermeasure: migratedCountermeasure,

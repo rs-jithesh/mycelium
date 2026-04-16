@@ -39,7 +39,7 @@
     getDefenseEventSeverity,
   } from './engine/formulas'
   import { BALANCE } from './engine/balance.config'
-  import { defenseFlavorDefinitions } from './engine/happenings'
+  import { defenseFlavorDefinitions, getAffordableQuantity } from './engine/happenings'
   import {
     countermeasureDefinitions,
     generatorDefinitions,
@@ -52,7 +52,9 @@
   } from './lib/game'
   import type { ActiveDefenseEvent, CountermeasureId, DefenseEventId, DefenseEventSeverity, GeneratorId, HostEchoDefinition, OfflineEvent, OfflineNarrative } from './lib/game'
   import { SEVERITY_COLORS } from './lib/game'
+  import Decimal from 'break_eternity.js'
   import { formatBiomass, formatBPS } from './utils/formatNumber'
+  import InfoTip from './lib/InfoTip.svelte'
 
   type ViewId = 'terminal' | 'evolution' | 'spore' | 'wiki'
 
@@ -97,6 +99,14 @@
   let biomassPulseTimer: ReturnType<typeof setTimeout> | undefined
   let bgGlitching = false
   let lastBgGlitchCount = 0
+
+  let clickFloats: Array<{ id: number; x: number; y: number; value: string }> = []
+  let clickFloatCounter = 0
+  let clickZoneIdle = true
+  let clickZoneIdleTimer: ReturnType<typeof setTimeout> | undefined
+  let lastRegisteredClickAt = 0
+  let clickCooldownProgress = 1
+  let clickCooldownRafId: number | undefined
   let bpsLiftFlash = false
   let panelAlertFlash = false
   let bpsPurchaseFlash = false
@@ -118,6 +128,24 @@
   let visibleWikiEntry = filteredWikiEntries[0] ?? null
 
   const allTopicsSummary = 'Browse the archive by section or search across every topic. The right pane summarizes the current section and includes all matching entries.'
+
+  function getCurrencyTierTooltip(biomass: Decimal): string {
+    const tiers = BALANCE.CURRENCY_TIERS
+    let currentTierIdx = -1
+    const biomassNum = biomass.toNumber()
+    for (let i = tiers.length - 1; i >= 0; i--) {
+      if (biomassNum >= tiers[i].threshold) {
+        currentTierIdx = i
+        break
+      }
+    }
+    return tiers
+      .map((tier, idx) => {
+        const marker = idx === currentTierIdx ? ' ▶ ' : '   '
+        return `${marker}${tier.label}: ${formatBiomass(tier.threshold, true)}`
+      })
+      .join('\n')
+  }
 
   function resetGameForDebug() {
     if (typeof window !== 'undefined') {
@@ -275,11 +303,16 @@
     }
   }
 
-  function absorbWithProgress() {
+  function absorbWithProgress(event?: MouseEvent) {
+    if (Date.now() - lastRegisteredClickAt < BALANCE.MIN_CLICK_INTERVAL_MS) {
+      return
+    }
+    lastRegisteredClickAt = Date.now()
+
     playThud()
 
     bgGlitching = true
-    setTimeout(() => { bgGlitching = false }, 300)
+    setTimeout(() => { bgGlitching = false }, BALANCE.FLASH_FADE_OUT_MS)
 
     const clickValue = $game.biomassPerClick
     const threshold = $game.biomassPerSecond.mul(5)
@@ -290,6 +323,42 @@
         biomassPulse = false
       }, 150)
     }
+
+    if (event) {
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+      const x = event.clientX - rect.left
+      const y = event.clientY - rect.top
+      const id = clickFloatCounter++
+      const value = `+${formatBiomass($game.biomassPerClick, useScientificNotation)}Ψ`
+      clickFloats = [...clickFloats, { id, x, y, value }]
+      setTimeout(() => {
+        clickFloats = clickFloats.filter(f => f.id !== id)
+      }, 900)
+    }
+
+    clickZoneIdle = false
+    clearTimeout(clickZoneIdleTimer)
+    clickZoneIdleTimer = setTimeout(() => {
+      clickZoneIdle = true
+    }, 3000)
+
+    if (clickCooldownRafId !== undefined) {
+      cancelAnimationFrame(clickCooldownRafId)
+    }
+    const intervalMs = BALANCE.MIN_CLICK_INTERVAL_MS
+    const startTime = performance.now()
+    clickCooldownProgress = 0
+
+    function updateProgress(now: number) {
+      const elapsed = now - startTime
+      clickCooldownProgress = Math.min(1, elapsed / intervalMs)
+      if (clickCooldownProgress < 1) {
+        clickCooldownRafId = requestAnimationFrame(updateProgress)
+      } else {
+        clickCooldownRafId = undefined
+      }
+    }
+    clickCooldownRafId = requestAnimationFrame(updateProgress)
 
     game.absorb()
   }
@@ -474,9 +543,6 @@
   $: hostProgressLabel = formatHostProgress(hostProgressPercent)
   $: currentHostDef = getCurrentHostDefinition($game)
   $: currentHostFlavor = currentHostDef.flavor
-  $: degradationRate = $game.hostMaxHealth.gt(0)
-    ? Number($game.biomassPerSecond.div($game.hostMaxHealth).mul(100).toFixed(2))
-    : 0
   $: latestLogEntry = getLatestVisibleEvent($game.log)
   $: if (activeView !== 'wiki' && !isNavVisible(activeView)) {
     activeView = 'terminal'
@@ -1208,9 +1274,20 @@
         <section class="workspace-main">
             <div class="workspace-main__center">
               <div class="terminal-focus">
-                <div class="biomass-chamber" on:click={() => absorbWithProgress()}>
+<div
+                  class="biomass-chamber"
+                  class:biomass-chamber--idle={clickZoneIdle}
+                  on:click={(e) => absorbWithProgress(e)}
+                >
                   <p class="biomass-chamber__label">CURRENT TOTAL BIOMASS</p>
-                  <h2 class="biomass-chamber__value" class:biomass-chamber__value--pulse={biomassPulse}>{formatBiomass($game.biomass, useScientificNotation)}<span> Ψ</span></h2>
+                  <div class="biomass-chamber__value-row">
+                    <h2 class="biomass-chamber__value" class:biomass-chamber__value--pulse={biomassPulse}>{formatBiomass($game.biomass, useScientificNotation)}<span> Ψ</span></h2>
+                    <InfoTip
+                      mode="hover"
+                      text={getCurrencyTierTooltip($game.biomass)}
+                      label="Currency scale"
+                    />
+                  </div>
                   {#if $game.visibility.bpsDisplay}
                     <p class="biomass-chamber__label">
                       PASSIVE ABSORPTION ::
@@ -1219,14 +1296,17 @@
                         <span class="bps-suppression-tag">{suppressionLabel}</span>
                       {/if}
                     </p>
-                    <p class="biomass-chamber__label" title="Each click yields this many times your current per-second output. Active play is significantly amplified.">CLICK :: +{formatBiomass($game.biomassPerClick, useScientificNotation)} Ψ [≈ {($game.biomassPerSecond.gt(0) ? $game.biomassPerClick.div($game.biomassPerSecond).toFixed(1) : '—')}&times; BPS]</p>
+                    <p class="biomass-chamber__label" title="Each click yields this times your current per-second output. Active play is significantly amplified.">CLICK :: +{formatBiomass($game.biomassPerClick, useScientificNotation)} Ψ [≈ {($game.biomassPerSecond.gt(0) ? $game.biomassPerClick.div($game.biomassPerSecond).toFixed(1) : '—')}&times; BPS]</p>
                   {/if}
                   {#if $game.clickCount === 0}
-                    <p class="biomass-chamber__hint">CLICK TO ABSORB</p>
+                    <p class="biomass-chamber__hint biomass-chamber__hint--cta">[ CLICK TO ABSORB ]</p>
                   {/if}
                   {#if $game.manifestationQueue.length > 0}
                     <p class="biomass-chamber__event">{$game.manifestationQueue[0]}</p>
                   {/if}
+                  {#each clickFloats as float (float.id)}
+                    <span class="click-float" style="left: {float.x}px; top: {float.y}px;">{float.value}</span>
+                  {/each}
                 </div>
 
                 <!-- Signal economy temporarily disabled. -->
@@ -1250,6 +1330,17 @@
                 <div class="analysis-panel__progress">
                   <div class="analysis-panel__row">
                     <span>DEGRADATION PROGRESS</span>
+                    <InfoTip
+                      mode="click"
+                      text="{BALANCE.DEGRADATION_STATUS_LABELS.stable}
+
+{BALANCE.DEGRADATION_STATUS_LABELS.accelerating}
+
+{BALANCE.DEGRADATION_STATUS_LABELS.critical}
+
+({BALANCE.DEGRADATION_STATUS_LABELS.note})"
+                      label="Degradation status legend"
+                    />
                   </div>
                   <div
                     class="analysis-progress-bar"
@@ -1264,10 +1355,10 @@
                   >
                     <div class="analysis-progress-bar__fill" aria-hidden="true" style={`width: ${hostProgressPercent}%`}></div>
                     <span class="analysis-progress-bar__label analysis-progress-bar__label--track">
-                      {hostProgressLabel} [+{degradationRate.toFixed(2)}%/s]{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
+                      {hostProgressLabel}{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
                     </span>
                     <span class="analysis-progress-bar__label analysis-progress-bar__label--fill" aria-hidden="true" style={`clip-path: inset(0 ${100 - hostProgressPercent}% 0 0)`}>
-                      {hostProgressLabel} [+{degradationRate.toFixed(2)}%/s]{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
+                      {hostProgressLabel}{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
                     </span>
                   </div>
                 </div>
@@ -1418,11 +1509,7 @@
                       on:pointerleave={clearGeneratorBuyHold}
                       on:pointercancel={clearGeneratorBuyHold}
                     >
-                      {#if buyBtnAcquiredMap.get(generator.id)}
-                        <span class="module-card__buy-btn-text--acquired">[ ACQUIRED ]</span>
-                      {:else}
-                        [ BUY ]
-                      {/if}
+                      [ BUY {$game.buyAmount === 'MAX' ? `×MAX (${getAffordableQuantity($game, generator.id, $game.buyAmount)})` : ''}{formatBiomass(getGeneratorCost($game, generator.id, getAffordableQuantity($game, generator.id, $game.buyAmount)), useScientificNotation)}Ψ ]
                     </button>
                   </div>
                 </div>
@@ -1500,7 +1587,7 @@
           {/if}
         </header>
 
-        <section class="mobile-hero">
+        <section class="mobile-hero" on:click={() => absorbWithProgress()}>
           <p class="mobile-hero__label">AVAILABLE BIOMASS</p>
           <div class="mobile-hero__value-row">
             <span class="mobile-hero__glyph">Ψ</span>
@@ -1539,6 +1626,17 @@
 
           <div class="mobile-analysis__progress-row">
             <span>DEGRADATION PROGRESS</span>
+            <InfoTip
+              mode="click"
+              text="{BALANCE.DEGRADATION_STATUS_LABELS.stable}
+
+{BALANCE.DEGRADATION_STATUS_LABELS.accelerating}
+
+{BALANCE.DEGRADATION_STATUS_LABELS.critical}
+
+({BALANCE.DEGRADATION_STATUS_LABELS.note})"
+              label="Degradation status legend"
+            />
           </div>
           <div
             class="analysis-progress-bar"
@@ -1553,10 +1651,10 @@
           >
             <div class="analysis-progress-bar__fill" aria-hidden="true" style={`width: ${hostProgressPercent}%`}></div>
             <span class="analysis-progress-bar__label analysis-progress-bar__label--track">
-              {hostProgressLabel} [+{degradationRate.toFixed(2)}%/s]{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
+              {hostProgressLabel}{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
             </span>
             <span class="analysis-progress-bar__label analysis-progress-bar__label--fill" aria-hidden="true" style={`clip-path: inset(0 ${100 - hostProgressPercent}% 0 0)`}>
-              {hostProgressLabel} [+{degradationRate.toFixed(2)}%/s]{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
+              {hostProgressLabel}{hostProgressPercent >= 80 ? ' [CRITICAL]' : hostProgressPercent >= 50 ? ' [ACCELERATING]' : ''}
             </span>
           </div>
 
@@ -2170,9 +2268,9 @@
                 <div class="overview-stat">
                   <span class="overview-stat__label">HIGHEST STAGE</span>
                   <strong>{$game.highestStageReached.toString().padStart(2, '0')}</strong>
-                  {#if $game.highestStageReached === $game.currentStage && $game.highestStageReached > 1}
+                  <!-- {#if $game.highestStageReached === $game.currentStage && $game.highestStageReached > 1}
                     <span class="overview-stat__badge">PERSONAL BEST</span>
-                  {/if}
+                  {/if} -->
                 </div>
               </div>
             </TerminalPanel>

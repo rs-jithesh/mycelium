@@ -54,7 +54,7 @@ declare global {
 
 export const _pendingOfflineNarrative = writable<OfflineNarrative | null>(null)
 
-export type DefenseToastType = 'start' | 'expire'
+export type DefenseToastType = 'start' | 'expire' | 'forecast'
 
 export interface DefenseToastEntry {
   id: string

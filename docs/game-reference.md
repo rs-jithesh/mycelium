@@ -185,7 +185,7 @@ function createDefaultVisibilityState(): VisibilityState {
     observationLog: false,
     bpsDisplay: false,
     generatorPanel: false,
-    generatorTiers: [true, false, false, false, false, false, false, false],
+    generatorTiers: [true, false, false, false, false, false, false, false, false, false, false],
     upgradePanel: false,
     strainPrompt: false,
     statsPanel: false,
@@ -214,7 +214,10 @@ The generator ladder is:
 5. Fruiting Canopy
 6. Decomposer Bloom
 7. Subterranean Nexus
-8. Planetary Membrane
+8. Lithospheric Web
+9. Atmospheric Drift
+10. Oceanic Threadwork
+11. Planetary Membrane
 
 ### Strains
 
@@ -307,32 +310,30 @@ Current generator settings:
 
 ```ts
 GENERATOR_BASE_COSTS: [
-  10, 120, 6_000, 100_000,
-  1_800_000, 4e10, 2e15, 1.5e21,
+  6, 50, 400, 4_000,
+  30_000, 250_000, 2_000_000, 15_000_000,
+  120_000_000, 1_000_000_000, 9_000_000_000,
 ],
 
 GENERATOR_BASE_PRODUCTION: [
-  0.1, 90, 720, 8_000,
-  100_000, 2.5e9, 6e14, 1.5e20,
+  0.008, 0.04, 0.2, 1,
+  5, 25, 300, 2_000,
+  12_000, 60_000, 300_000,
 ],
 
-GENERATOR_UNLOCK_THRESHOLDS: [0, 18, 12, 8, 10, 10, 10, 10],
-GENERATOR_STAGE_GATES: [0, 0, 2, 2, 3, 4, 6, 7],
+GENERATOR_UNLOCK_THRESHOLDS: [0, 6, 6, 6, 8, 7, 6, 3, 2, 2, 2],
+GENERATOR_STAGE_GATES: [0, 0, 1, 2, 2, 3, 4, 5, 7, 9, 11],
 ```
-
-Note: Tiers 3 and 4 share the same `GENERATOR_STAGE_GATES` value of 2, which means both become stage-eligible at Stage 2. Tier 4 has a separate progress gate (see below) that delays it within Stage 2.
 
 ### Early structural pacing
 
-The current early structural pacing model delays Tier 4 based on Stage 2 host progress.
+The current early structural pacing model uses stage gates and ownership thresholds to control unlock timing.
 
 ```ts
-TIER4_STAGE2_HOST_PROGRESS_GATE: 25,
+TIER4_STAGE2_HOST_PROGRESS_GATE: 0,
 ```
 
-`getHostProgress` returns a 0–100 scale value, so 25 means Tier 4 unlocks at 25% into the Stage 2 host bar.
-
-Tier 3 is unlocked by reaching Stage 2. Tier 4 requires Stage 2 host progress.
+Tier 3 is unlocked by reaching Stage 2. Tier 4 requires Stage 2 and previous-tier ownership.
 
 ### Strain modifiers
 
@@ -406,17 +407,17 @@ Current host health values:
 
 ```ts
 HOST_HEALTH: [
-  600,              // Stage 1: The Fallen Leaf
-  14_000,           // Stage 2: The Woodlouse
-  90_000,           // Stage 3: The Ant Colony
-  320_000,          // Stage 4: The Rotting Elm
-  1_000_000,        // Stage 5: The Corvid
-  5_000_000,        // Stage 6: The Boar
-  25_000_000,       // Stage 7: The River Network
-  100_000_000,      // Stage 8: The Old-Growth Forest
-  500_000_000,      // Stage 9: The Agricultural System
-  2_000_000_000,    // Stage 10: The Urban Microbiome
-  10_000_000_000,   // Stage 11: The Biosphere
+  300,        // 01: The Fallen Leaf
+  8_000,      // 02: The Woodlouse
+  60_000,     // 03: The Ant Colony
+  320_000,    // 04: The Rotting Elm
+  1_000_000,  // 05: The Corvid
+  5_000_000,  // 06: The Boar
+  7_000_000,  // 07: The River Network
+  14_000_000, // 08: The Old-Growth Forest
+  30_000_000, // 09: The Agricultural System
+  50_000_000, // 10: The Urban Microbiome
+  100_000_000,// 11: The Biosphere
 ],
 ```
 
@@ -1028,22 +1029,25 @@ Signal-specific milestones are commented out (the simulation models a first run,
 
 ## 17. Current Pacing Shape
 
-The current structural tuning targets a **7–14 day first run** for a medium-active player. The verified simulation output (as of the balance rework) is:
+The current structural tuning targets a **6–7 day first run** for a medium-active player. The verified simulation output (as of the balance rework) is:
 
 | Milestone | Time |
 |-----------|------|
-| Stage 1 cleared | ~13m |
-| Stage 2 cleared | ~1h 31m |
-| Stage 3 cleared (Skills unlocked) | ~3h 13m |
-| Stage 4 cleared | ~8h 30m |
-| Stage 5 cleared | ~13h 48m |
-| Stage 6 cleared | ~4d 1h |
-| Stage 7 cleared | ~11d 7h |
-| Stage 8 cleared (full run) | ~12d 6h |
+| Stage 1 cleared | ~14m |
+| Stage 2 cleared | ~55m |
+| Stage 3 cleared | ~2h 48m |
+| Stage 4 cleared | ~4h 19m |
+| Stage 5 cleared | ~7h |
+| Stage 6 cleared | ~11h |
+| Stage 7 cleared | ~2d |
+| Stage 8 cleared | ~3d |
+| Stage 9 cleared | ~4d 10h |
+| Stage 10 cleared | ~5d 10h |
+| Stage 11 cleared | ~6d 18h |
 
-Stages 2 and 3 always fire in the same simulation tick. This is a structural artifact of how stage gates work: Stage 3 became immediately reachable the moment Stage 2 cleared, so the simulation advances both in one pass.
+Final BPS at campaign end: ~3,624. Peak BPS: ~3,624.
 
-**Important calibration note:** The analytical model (`analytical-model.ts --derive`) cannot model the BPS spike from Tier 6/7 unlocks. Stages 5–8 timing must be verified against `simulation.ts`, not the analytical derivation. Only `HOST_HEALTH` is adjusted to tune pacing — generator costs and production values are not changed for pacing.
+**Important calibration note:** The analytical model (`analytical-model.ts --derive`) cannot model the BPS spike from Tier 6/7 unlocks. Stages 5–11 timing must be verified against `simulation.ts`, not the analytical derivation. Only `HOST_HEALTH` is adjusted to tune pacing — generator costs and production values are not changed for pacing.
 
 ## 18. Important Implementation Notes
 
@@ -1157,7 +1161,7 @@ The game currently consists of:
 
 - **Host-based progression** — 11 stages with escalating complexity (micro → organism → planetary)
 - **Zone system** — Multi-zone hosts (Stage 3+) with sequential unlock thresholds
-- **8 generator tiers** — With cost scaling and unlock progression
+- **11 generator tiers** — With cost scaling and unlock progression
 - **9 upgrades** — Covering early, mid, and late-game
 - **Three strains** — Parasite (click), Symbiote (passive), Saprophyte (hybrid, prestige-locked)
 - **Stat system** — Virulence, Resilience, Complexity with soft caps and strain synergy

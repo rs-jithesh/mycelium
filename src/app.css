@@ -509,20 +509,17 @@ body::after {
   width: 0.75rem;
   height: 0.75rem;
   background: var(--primary-container);
-  border-radius: 50%;
   margin-left: auto;
-  animation: mutation-blink 1s steps(1, end) infinite;
+  animation: mutation-blink 1s steps(20, end) infinite;
   box-shadow: 0 0 8px rgba(0, 246, 62, 0.8);
 }
 
 @keyframes mutation-blink {
-  0%,
-  49% {
+  0% {
     opacity: 1;
   }
 
-  50%,
-  100% {
+  50% {
     opacity: 0;
   }
 }
@@ -585,11 +582,12 @@ body::after {
 }
 
 .system-bar__dot {
-  width: 0.6rem;
-  height: 0.6rem;
-  background: var(--primary-container);
-  box-shadow: 0 0 12px rgba(0, 246, 62, 0.75);
-  animation: blink 1s step-end infinite;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: red;
+  box-shadow: 0 0 12px rgba(255, 0, 0, 0.75);
+  animation: blink 2s step-end infinite;
 }
 
 @keyframes blink {
@@ -1736,6 +1734,28 @@ body::after {
   color: var(--primary);
 }
 
+.biomass-chamber__value-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.biomass-chamber__value-row .info-tip {
+  display: inline-flex;
+  align-items: center;
+}
+
+.biomass-chamber__value-row .info-tip__button {
+  font-size: 0.75rem;
+  opacity: 0.5;
+}
+
+.biomass-chamber__value-row .info-tip__popup {
+  font-size: 0.7rem;
+  white-space: pre-line;
+}
+
 .biomass-chamber__value--pulse {
   animation: biomassPulse 150ms ease;
 }
@@ -1746,11 +1766,15 @@ body::after {
 }
 
 .biomass-chamber {
+  position: relative;
   cursor: pointer;
-  border-radius: 8px;
-  transition: background-color 0.15s ease;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   user-select: none;
   -webkit-user-select: none;
+  overflow: visible;
+  padding: 0.75rem;
 }
 
 .biomass-chamber:hover {
@@ -1780,6 +1804,74 @@ body::after {
   font-size: 0.9rem;
   letter-spacing: 0.05em;
   font-style: italic;
+}
+
+.biomass-chamber:hover {
+  border-color: rgba(0, 255, 65, 0.25);
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.08);
+}
+
+@keyframes click-zone-breathe {
+  0%, 100% {
+    border-color: rgba(0, 255, 65, 0.08);
+    box-shadow: 0 0 8px rgba(0, 255, 65, 0.04);
+  }
+  50% {
+    border-color: rgba(0, 255, 65, 0.3);
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.12);
+  }
+}
+
+.biomass-chamber--idle {
+  animation: click-zone-breathe 2.4s ease-in-out infinite;
+}
+
+.biomass-chamber--idle:hover {
+  animation: none;
+  border-color: rgba(0, 255, 65, 0.25);
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.08);
+}
+
+.biomass-chamber__hint--cta {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  color: var(--color-accent, #00ff41);
+  opacity: 0.7;
+  animation: blink-cta 1.2s step-start infinite;
+  margin-top: 0.5rem;
+}
+
+@keyframes blink-cta {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 0.15; }
+}
+
+.click-float {
+  position: absolute;
+  pointer-events: none;
+  font-family: var(--font-mono, monospace);
+  font-size: 1.1rem;
+  color: #00ff41;
+  text-shadow: 0 0 8px rgba(0, 255, 65, 0.9);
+  white-space: nowrap;
+  transform: translate(-50%, -100%);
+  animation: click-float-rise 0.9s ease-out forwards;
+  z-index: 10;
+}
+
+@keyframes click-float-rise {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -100%);
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -220%);
+  }
 }
 
 .analysis-panel {

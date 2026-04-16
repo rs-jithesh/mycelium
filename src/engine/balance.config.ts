@@ -69,6 +69,13 @@ export const BALANCE = {
   // Auto-save interval in milliseconds (30 seconds)
   SAVE_INTERVAL_MS: 30_000,
 
+  // Click flash fade durations
+  FLASH_FADE_IN_MS: 150,
+  FLASH_FADE_OUT_MS: 250,
+
+  // Minimum interval between registered clicks (ms) — prevents auto-clicker abuse
+  MIN_CLICK_INTERVAL_MS: 100,
+
   // localStorage key for save data
   STORAGE_KEY: 'mycelium-protocol-save',
 
@@ -101,12 +108,12 @@ export const BALANCE = {
   // Generator base production per second (index 0 = Tier 1)
   GENERATOR_BASE_PRODUCTION: [
     0.008, 0.04, 0.2, 1,
-    5, 25, 120, 600,
-    3_000, 15_000, 80_000,
+    5, 25, 300, 2_000,
+    12_000, 60_000, 300_000,
   ],
 
   // Previous-tier ownership needed to reveal the next generator tier
-  GENERATOR_UNLOCK_THRESHOLDS: [0, 6, 6, 6, 8, 7, 6, 5, 4, 4, 3],
+  GENERATOR_UNLOCK_THRESHOLDS: [0, 6, 6, 6, 8, 7, 6, 3, 2, 2, 2],
 
   // Tier 4 unlocks when Stage 2 host progress >= this value (0–100 scale)
   TIER4_STAGE2_HOST_PROGRESS_GATE: 0,
@@ -270,11 +277,11 @@ export const BALANCE = {
     320_000,  // 04: The Rotting Elm (macro, plant)
     1_000_000,// 05: The Corvid (warm-blooded)
     5_000_000,// 06: The Boar (large fauna)
-    25_000_000,// 07: The River Network (ecosystem)
-    100_000_000,// 08: The Old-Growth Forest (rival network)
-    500_000_000,// 09: The Agricultural System (human-adjacent)
-    2_000_000_000,// 10: The Urban Microbiome (civilizational)
-    10_000_000_000,// 11: The Biosphere (planetary)
+    7_000_000,  // 07: The River Network
+    14_000_000, // 08: The Old-Growth Forest
+    30_000_000, // 09: The Agricultural System
+    50_000_000, // 10: The Urban Microbiome
+    100_000_000, // 11: The Biosphere
   ],
 
   // Per-host zone configuration
@@ -710,6 +717,22 @@ export const BALANCE = {
   NOTATION_LOCALE_MAX_FULL: 1_000_000,
   NOTATION_SHORTHAND_MAX: 1e15,
 
+  // Currency scale tiers (for tooltip display) — ascending order
+  CURRENCY_TIERS: [
+    { label: 'K', threshold: 1e3 },
+    { label: 'M', threshold: 1e6 },
+    { label: 'B', threshold: 1e9 },
+    { label: 'T', threshold: 1e12 },
+  ],
+
+  // Degradation status labels — used in the legend tooltip
+  DEGRADATION_STATUS_LABELS: {
+    stable: 'Stable — degradation is progressing normally.',
+    accelerating: 'Accelerating — degradation rate has increased; infection spread is drawing attention.',
+    critical: 'Critical — host defenses are mobilising; a defense event is imminent or already triggered.',
+    note: 'These are visual indicators only. No separate action is required beyond normal progression.',
+  },
+
   // ═══════════════════════════════════════════════════════════════════════════
   // STRAIN & MUTATION SYSTEM
   // All tunables for the strain-stat synergy, soft caps, and signature abilities.
@@ -812,9 +835,9 @@ export const BALANCE = {
   SUBSTRATE: {
     // How many of tier (n-1) are needed per unit of tier n for full efficiency.
     // Index 0 is unused (tier 1 has no dependency).
-    RATIOS: [0, 4, 3, 3, 2, 2, 2, 2, 1.5, 1.5, 1],
+    RATIOS: [0, 4, 3, 3, 2, 2, 2, 1, 1, 0.5, 0.5],
     // Minimum output fraction when substrate is fully depleted (0.0–1.0).
-    // At 0.20, a tier with zero substrate still outputs 20% of its base BPS.
-    FLOOR: 0.20,
+    // At 0.35, a tier with zero substrate still outputs 35% of its base BPS.
+    FLOOR: 0.35,
   },
 };

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { BALANCE } from '../engine/balance.config'
   import { hostConfigs } from '../lib/hostBackgrounds/hostConfigs'
   import {
     generateHyphae,
@@ -15,7 +16,7 @@
   $: d = Math.min(1, Math.max(0, degradation))
 
   function lerp(a: number, b: number, t: number): number {
-    return a + (b - a) * Math.min(1, Math.max(0, t))
+    return a + (b - a) * t < 0 ? 0 : a + (b - a) * t
   }
 
   function interpolateColor(hex1: string, hex2: string, t: number): string {
@@ -23,15 +24,16 @@
     const g1 = parseInt(hex1.slice(3, 5), 16)
     const b1 = parseInt(hex1.slice(5, 7), 16)
     const r2 = parseInt(hex2.slice(1, 3), 16)
-    const g2 = parseInt(hex2.slice(3, 5), 16)
+    const g2 = parseInt(hex2.slice(5, 7), 16)
     const b2 = parseInt(hex2.slice(5, 7), 16)
-    const r = Math.round(lerp(r1, r2, t))
+    const clampedT = Math.min(1, Math.max(0, t))
+    const r = Math.round(lerp(r1, r2, clampedT))
       .toString(16)
       .padStart(2, '0')
-    const g = Math.round(lerp(g1, g2, t))
+    const g = Math.round(lerp(g1, g2, clampedT))
       .toString(16)
       .padStart(2, '0')
-    const b = Math.round(lerp(b1, b2, t))
+    const b = Math.round(lerp(b1, b2, clampedT))
       .toString(16)
       .padStart(2, '0')
     return `#${r}${g}${b}`
@@ -86,12 +88,18 @@
   $: mycIsVisible = mycLayerOpacity > 0.05
 </script>
 
-<div class="host-bg">
+<div class="host-bg" class:glitching>
   <svg
     viewBox="0 0 800 450"
     preserveAspectRatio="xMidYMid slice"
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
+    style="
+      --hyphae-color: {hyphaeColor};
+      --hyphae-opacity: 0.7;
+      --fruiting-color: {fruitingColor};
+      --fruiting-opacity: 0.6;
+    "
   >
     <defs>
       <radialGradient id="vignette-grad" cx="50%" cy="50%" r="60%">
@@ -177,10 +185,10 @@
       {#each hyphaeBranches as branch}
         <path
           d={branch.d}
-          stroke={glitching ? '#a0ff50' : hyphaeColor}
+          stroke="var(--hyphae-color)"
           stroke-width={branch.strokeWidth}
           fill="none"
-          opacity={glitching ? '0.9' : '0.7'}
+          opacity="var(--hyphae-opacity)"
         />
       {/each}
 
@@ -189,15 +197,15 @@
           cx={body.cx}
           cy={body.cy}
           r={body.r}
-          fill={glitching ? '#c0ff70' : fruitingColor}
-          opacity={glitching ? '0.85' : '0.6'}
+          fill="var(--fruiting-color)"
+          opacity="var(--fruiting-opacity)"
         />
       {/each}
 
       {#each corruptionPaths as cp}
         <path
           d={cp.d}
-          stroke={glitching ? '#a0ff50' : hyphaeColor}
+          stroke="var(--hyphae-color)"
           stroke-width={cp.strokeWidth}
           fill="none"
           opacity={cp.opacity}
@@ -246,5 +254,24 @@
     inset: 0;
     width: 100%;
     height: 100%;
+    transition:
+      --hyphae-color 150ms ease-in-out,
+      --hyphae-opacity 150ms ease-in-out,
+      --fruiting-color 150ms ease-in-out,
+      --fruiting-opacity 150ms ease-in-out;
+  }
+
+  .glitching svg {
+    --hyphae-color: #a0ff50;
+    --hyphae-opacity: 0.9;
+    --fruiting-color: #c0ff70;
+    --fruiting-opacity: 0.85;
+  }
+
+  :global(.glitching svg) {
+    --hyphae-color: #a0ff50;
+    --hyphae-opacity: 0.9;
+    --fruiting-color: #c0ff70;
+    --fruiting-opacity: 0.85;
   }
 </style>

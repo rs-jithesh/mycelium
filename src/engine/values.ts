@@ -145,6 +145,7 @@ export function createDefaultState(): GameState {
     },
     buyAmount: 1,
     activeDefenseEvents: [],
+    pendingDefenseEvents: [],
     nextDefenseEventId: null,
     equippedCountermeasure: null,
     activeParasiteDefenseBurstMs: 0,

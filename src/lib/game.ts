@@ -174,6 +174,7 @@ export interface ActiveDefenseEvent {
   id: DefenseEventId
   name: string
   description: string
+  startsAt: number
   endsAt: number
   multiplier: Decimal
   clickMultiplier?: Decimal
@@ -412,6 +413,7 @@ export interface GameState {
   upgrades: Record<UpgradeId, boolean>
   buyAmount: BuyAmount
   activeDefenseEvents: ActiveDefenseEvent[]
+  pendingDefenseEvents: ActiveDefenseEvent[]
   nextDefenseEventId: DefenseEventId | null
   equippedCountermeasure: CountermeasureId | null
   activeParasiteDefenseBurstMs: number

@@ -49,8 +49,8 @@ const DURATION_HOURS = parseFloat(positionalArgs[0] ?? '240')
 const MAX_GAME_SECONDS = DURATION_HOURS * 3600
 const TICK_MS = BALANCE.TICK_MS
 const ACTIVE_PLAY_UNTIL_SECONDS = 12 * 3600
-const CLICK_INTERVALS_MS_BY_STAGE = [3500, 6000, 9000]
-const STAT_PRIORITY: StatId[] = ['virulence', 'virulence', 'complexity', 'virulence', 'resilience', 'complexity', 'virulence', 'resilience', 'complexity']
+const CLICK_INTERVALS_MS_BY_STAGE = [3500, 6000, 9000, 10000, 11000, 12000, 13000, 14000, 15000, 16000, 17000]
+const STAT_PRIORITY: StatId[] = ['virulence', 'virulence', 'complexity', 'virulence', 'resilience', 'complexity', 'virulence', 'resilience', 'complexity', 'virulence', 'resilience']
 const SKILL_PRIORITY: SkillId[] = ['enzymatic-breakdown', 'quorum-recursion', 'chitin-shell', 'acidic-secretion', 'signal-amplification', 'dormancy-protocol', 'hemorrhagic-spread', 'distributed-cognition', 'spore-hardening']
 
 // ── Milestones ──────────────────────────────────────────────────────────
@@ -68,7 +68,10 @@ const milestones = [
   { label: 'Stage 5 cleared', check: (s: GameState) => s.currentStage >= 6 },
   { label: 'Stage 6 cleared', check: (s: GameState) => s.currentStage >= 7 },
   { label: 'Stage 7 cleared', check: (s: GameState) => s.currentStage >= 8 },
-  { label: 'Stage 8 cleared', check: (s: GameState) => s.currentStage >= 8 && s.hostCompleted },
+  { label: 'Stage 8 cleared', check: (s: GameState) => s.currentStage >= 9 },
+  { label: 'Stage 9 cleared', check: (s: GameState) => s.currentStage >= 10 },
+  { label: 'Stage 10 cleared', check: (s: GameState) => s.currentStage >= 11 },
+  { label: 'Stage 11 cleared', check: (s: GameState) => s.currentStage >= 11 && s.hostCompleted },
   // { label: 'First coord command issued', check: (s: GameState) => s.activeCoordinationLinks.length > 0 },
   // { label: 'Signal cap maxed (>= cap)', check: (s: GameState) => s.signal >= formulas.getSignalCap(s) * 0.95 },
 ]
@@ -120,7 +123,7 @@ function genSummary(s: GameState): string {
 
 function suppressDefense(state: GameState, fakeTime: number): GameState {
   if (state.activeDefenseEvents.length === 0 && state.nextDefenseCheckAt > fakeTime) return state
-  return { ...state, nextDefenseCheckAt: fakeTime + 1e12, activeDefenseEvents: [] }
+  return { ...state, nextDefenseCheckAt: fakeTime + 1e12, activeDefenseEvents: [], pendingDefenseEvents: [] }
 }
 
 // Signal economy temporarily disabled.
@@ -826,15 +829,13 @@ console.log(`  Milestones: ${reached.size}/${milestones.length}`)
 const stageClears = [...reached.entries()].filter(([l]) => l.startsWith('Stage')).sort(([, a], [, b]) => a - b)
 if (stageClears.length > 0) {
   console.log('\nPacing summary:')
-  console.log('  STAGE CLEAR       | GAME TIME   | ELAPSED     | TARGET')
-  console.log('  ' + '\u2500'.repeat(60))
-  const targets = ['~12m', '~90m', '~4h', '~10h', '~24h', '~48h', '~4d', '~7d']
+  console.log('  STAGE CLEAR       | GAME TIME   | ELAPSED')
+  console.log('  ' + '\u2500'.repeat(50))
   let prev = 0
   for (let i = 0; i < stageClears.length; i++) {
     const [label, sec] = stageClears[i]
     const elapsed = sec - prev
-    const target = targets[i] ?? '?'
-    console.log(`  ${label.padEnd(19)} | ${fmt(sec).padEnd(11)} | ${fmt(elapsed).padEnd(11)} | ${target}`)
+    console.log(`  ${label.padEnd(19)} | ${fmt(sec).padEnd(11)} | ${fmt(elapsed)}`)
     prev = sec
   }
 }
