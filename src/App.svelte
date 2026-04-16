@@ -101,6 +101,7 @@
   let lastBgGlitchCount = 0
 
   let clickFloats: Array<{ id: number; x: number; y: number; value: string }> = []
+  let mobileClickFloats: Array<{ id: number; x: number; y: number; value: string }> = []
   let clickFloatCounter = 0
   let clickZoneIdle = true
   let clickZoneIdleTimer: ReturnType<typeof setTimeout> | undefined
@@ -124,6 +125,8 @@
   let showOfflineNarrative = false
   let currentOfflineEventIndex = -1
   let offlineNarrativeRun = 0
+  let showCurrencyModal = false
+  let showDegradationModal = false
   let filteredWikiEntries = wikiEntries.filter((entry) => entry.section === selectedWikiSection)
   let visibleWikiEntry = filteredWikiEntries[0] ?? null
 
@@ -158,6 +161,34 @@
     game.reset()
     activeView = 'terminal'
     isConfirmingSporeRelease = false
+  }
+
+  function openCurrencyModal() {
+    showCurrencyModal = true
+  }
+
+  function closeCurrencyModal() {
+    showCurrencyModal = false
+  }
+
+  function handleCurrencyModalKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      closeCurrencyModal()
+    }
+  }
+
+  function openDegradationModal() {
+    showDegradationModal = true
+  }
+
+  function closeDegradationModal() {
+    showDegradationModal = false
+  }
+
+  function handleDegradationModalKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
+      closeDegradationModal()
+    }
   }
 
   function getOfflineEventIcon(type: OfflineEvent['type']): string {
@@ -301,6 +332,15 @@
     } catch {
       // audio not supported
     }
+  }
+
+  function addMobileClickFloat(x: number, y: number) {
+    const id = clickFloatCounter++
+    const value = `+${formatBiomass($game.biomassPerClick, useScientificNotation)}Ψ`
+    mobileClickFloats = [...mobileClickFloats, { id, x, y, value }]
+    setTimeout(() => {
+      mobileClickFloats = mobileClickFloats.filter(f => f.id !== id)
+    }, 900)
   }
 
   function absorbWithProgress(event?: MouseEvent) {
@@ -1282,11 +1322,14 @@
                   <p class="biomass-chamber__label">CURRENT TOTAL BIOMASS</p>
                   <div class="biomass-chamber__value-row">
                     <h2 class="biomass-chamber__value" class:biomass-chamber__value--pulse={biomassPulse}>{formatBiomass($game.biomass, useScientificNotation)}<span> Ψ</span></h2>
-                    <InfoTip
-                      mode="hover"
-                      text={getCurrencyTierTooltip($game.biomass)}
-                      label="Currency scale"
-                    />
+                    <button
+                      class="biomass-chamber__info-button"
+                      type="button"
+                      aria-label="Currency notation information"
+                      on:click={openCurrencyModal}
+                    >
+                      i
+                    </button>
                   </div>
                   {#if $game.visibility.bpsDisplay}
                     <p class="biomass-chamber__label">
@@ -1330,17 +1373,14 @@
                 <div class="analysis-panel__progress">
                   <div class="analysis-panel__row">
                     <span>DEGRADATION PROGRESS</span>
-                    <InfoTip
-                      mode="click"
-                      text="{BALANCE.DEGRADATION_STATUS_LABELS.stable}
-
-{BALANCE.DEGRADATION_STATUS_LABELS.accelerating}
-
-{BALANCE.DEGRADATION_STATUS_LABELS.critical}
-
-({BALANCE.DEGRADATION_STATUS_LABELS.note})"
-                      label="Degradation status legend"
-                    />
+                    <button
+                      class="degradation-info-button"
+                      type="button"
+                      aria-label="Degradation status information"
+                      on:click={openDegradationModal}
+                    >
+                      i
+                    </button>
                   </div>
                   <div
                     class="analysis-progress-bar"
@@ -1582,12 +1622,21 @@
           {#if $game.visibility.stageDisplay}
             <div class="mobile-topbar__stage">STAGE: {$game.stageLabel.toUpperCase()}</div>
           {/if}
-          {#if $game.visibility.observationLog}
-            <button class="mobile-log-toggle" type="button" on:click={() => game.toggleLogPanel()}>[=]</button>
-          {/if}
         </header>
 
-        <section class="mobile-hero" on:click={() => absorbWithProgress()}>
+        <section class="mobile-hero" on:touchstart={(e) => {
+            const touch = e.touches[0]
+            if (touch) {
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+              const x = touch.clientX - rect.left
+              const y = touch.clientY - rect.top
+              addMobileClickFloat(x, y)
+            }
+            absorbWithProgress()
+          }} on:click={(e) => absorbWithProgress(e)}>
+          {#each mobileClickFloats as float (float.id)}
+            <span class="click-float" style="left: {float.x}px; top: {float.y}px;">{float.value}</span>
+          {/each}
           <p class="mobile-hero__label">AVAILABLE BIOMASS</p>
           <div class="mobile-hero__value-row">
             <span class="mobile-hero__glyph">Ψ</span>
@@ -1621,22 +1670,18 @@
             <div>
               <p class="mobile-analysis__host">HOST: {$game.hostName.toUpperCase()}</p>
             </div>
-            <p class="mobile-analysis__scan">AUTO_SCAN: ENABLED</p>
           </div>
 
           <div class="mobile-analysis__progress-row">
             <span>DEGRADATION PROGRESS</span>
-            <InfoTip
-              mode="click"
-              text="{BALANCE.DEGRADATION_STATUS_LABELS.stable}
-
-{BALANCE.DEGRADATION_STATUS_LABELS.accelerating}
-
-{BALANCE.DEGRADATION_STATUS_LABELS.critical}
-
-({BALANCE.DEGRADATION_STATUS_LABELS.note})"
-              label="Degradation status legend"
-            />
+            <button
+              class="degradation-info-button"
+              type="button"
+              aria-label="Degradation status information"
+              on:click={openDegradationModal}
+            >
+              i
+            </button>
           </div>
           <div
             class="analysis-progress-bar"
@@ -1687,28 +1732,26 @@
             </div>
           </div>
 
-          <p class="mobile-analysis__flavor">{currentHostFlavor}</p>
-          <p class="mobile-analysis__flavor">Threat :: {getCurrentHostThreatLevel()}</p>
-          {#if $game.activeDefenseEvents.length > 0}
-            <p class="mobile-analysis__flavor">Defense Pattern :: {getDynamicDefensePattern()}</p>
-            <p class="mobile-analysis__flavor">Transition Signal :: {getDynamicTransitionSignal()}</p>
-          {/if}
+          <p>{currentHostFlavor}</p>
 
           {#if $game.hostCompleted && hasNextStage($game)}
             <button class="mobile-generator-row__buy mobile-analysis__advance" type="button" on:click={() => game.advanceStage()}>
               [ ADVANCE TO STAGE {$game.currentStage + 1} ]
             </button>
           {/if}
+
+          <hr style="border: none; border-top: 1px solid #1e2a14; margin: 0.75rem 0;" />
+          <ObservationFeed entries={$game.structuredLog} maxVisible={4} fade={false} />
         </TerminalPanel>
         {/if}
 
         {#if $game.currentStage >= BALANCE.DEFENSE_FORECAST_UNLOCK_STAGE}
         <TerminalPanel title="DEFENSE CONTROL" tag="▲" variant="low" bleedHeader={true} className="mobile-card">
             {#if forecastCountdownLabel !== null}
-              <p class="mobile-analysis__flavor mobile-analysis__flavor--alert">{forecastCountdownLabel}</p>
+              <p style="color: #f0c040; font-weight: 600;">{forecastCountdownLabel}</p>
             {/if}
             {#if $game.activeDefenseEvents.length > 0}
-              <p class="mobile-analysis__flavor mobile-analysis__flavor--alert">Status: {getDefenseStatusLabel()}</p>
+              <p style="color: #f0c040; font-weight: 600;">Status: {getDefenseStatusLabel()}</p>
             {:else if $game.equippedCountermeasure === null}
               <!-- countermeasure prompt removed -->
             {:else}
@@ -1720,14 +1763,26 @@
               {#each countermeasureDefinitions as countermeasure}
                 {@const isActive = $game.equippedCountermeasure === countermeasure.id}
                 {@const isLocked = $game.activeDefenseEvents.length > 0 && !isActive}
+                {@const isFullMatch = countermeasure.targetEventIds.some(id => $game.activeDefenseEvents.some(e => e.id === id))}
+                {@const isPartialMatch = countermeasure.partialEventIds.some(id => $game.activeDefenseEvents.some(e => e.id === id))}
+                {@const isEngaged = isFullMatch || isPartialMatch}
                 <button
                   class="mobile-strain-button"
                   class:mobile-strain-button--locked={isLocked}
                   class:mobile-strain-button--active={isActive}
+                  class:mobile-strain-button--engaged-full={isEngaged && isFullMatch}
+                  class:mobile-strain-button--engaged-partial={isEngaged && !isFullMatch}
                   disabled={isLocked}
                   type="button"
                   on:click={() => game.equipCountermeasure(countermeasure.id)}
                 >
+                  {#if isFullMatch}
+                    <span class="mobile-strain-button__status">STATUS: ENGAGED [FULL]</span>
+                  {:else if isPartialMatch}
+                    <span class="mobile-strain-button__status">STATUS: ENGAGED [PARTIAL]</span>
+                  {:else}
+                    <span class="mobile-strain-button__status">STATUS: DORMANT</span>
+                  {/if}
                   <strong>{countermeasure.name.toUpperCase()}</strong>
                   <small>Full: {getCountermeasureFullCoverage(countermeasure.id)}</small>
                   <small>Partial: {getCountermeasurePartialCoverage(countermeasure.id)}</small>
@@ -1766,6 +1821,20 @@
                       SUBSTRATE: {substrateStatus === 'sufficient' ? 'SUFFICIENT' : substrateStatus === 'strained' ? `STRAINED [${effPct}%]` : `DEPLETED [${effPct}%]`}
                     </p>
                   {/if}
+                  {#if $game.generators[generator.id].owned > 0}
+                    {@const contribution = $game.biomassPerSecond.gt(0) ? getGeneratorProduction($game, generator.id).div($game.biomassPerSecond).toNumber() : 0}
+                    {@const relativeEff = getGeneratorRelativeEfficiency(generator.id)}
+                    {@const effLabel = formatEfficiencyLabel(relativeEff)}
+                    <div class="mobile-generator-row__contribution-bar" title="This generator's share of total BPS">
+                      <div class="mobile-generator-row__contribution-fill" style="width: {Math.min(contribution * 100, 100).toFixed(1)}%"></div>
+                    </div>
+                    <p class="mobile-generator-row__contribution-label">CONTRIBUTION: {(contribution * 100).toFixed(1)}%</p>
+                  {/if}
+                  <span
+                    class="mobile-generator-row__next-gain"
+                    class:mobile-generator-row__next-gain--disabled={!canAffordGenerator.get(generator.id)}
+                    title="Buying one more {generator.name} will increase your passive BPS by this amount."
+                  >NEXT: {getGeneratorBuyGain(generator.id)}</span>
                 </div>
                 <button class="mobile-generator-row__buy" disabled={!canAffordGenerator.get(generator.id)} type="button"
                   on:pointerdown={(event) => startGeneratorBuyHold(generator.id, event)}
@@ -2076,70 +2145,123 @@
           </div>
         </section>
 
+        <section class="mobile-evolution__overview-grid">
+          <div class="mobile-evolution__overview-stat">
+            <span class="mobile-evolution__overview-stat__label">HOSTS CONSUMED</span>
+            <strong>{getCompletedHosts($game).toString().padStart(2, '0')}</strong>
+            <span class="mobile-evolution__overview-stat__sublabel">this run</span>
+          </div>
+          <div class="mobile-evolution__overview-stat">
+            <span class="mobile-evolution__overview-stat__label">LIFETIME BIOMASS</span>
+            <strong>{formatDecimal($game.lifetimeBiomass)}</strong>
+            <span class="mobile-evolution__overview-stat__sublabel">all runs</span>
+          </div>
+          <div class="mobile-evolution__overview-stat">
+            <span class="mobile-evolution__overview-stat__label">GENERATORS OWNED</span>
+            <strong>{getTotalOwnedGenerators().toString().padStart(2, '0')}</strong>
+            <span class="mobile-evolution__overview-stat__sublabel">current</span>
+          </div>
+          <div class="mobile-evolution__overview-stat">
+            <span class="mobile-evolution__overview-stat__label">UPGRADES APPLIED</span>
+            <strong>{getPurchasedUpgradeCount().toString().padStart(2, '0')}</strong>
+            <span class="mobile-evolution__overview-stat__sublabel">this run</span>
+          </div>
+          <div class="mobile-evolution__overview-stat">
+            <span class="mobile-evolution__overview-stat__label">MUTATION POINTS</span>
+            <strong>{$game.mutationPoints.toString().padStart(2, '0')}</strong>
+            <span class="mobile-evolution__overview-stat__sublabel">available now</span>
+          </div>
+          <div class="mobile-evolution__overview-stat">
+            <span class="mobile-evolution__overview-stat__label">CURRENT STRAIN</span>
+            <strong>{getCurrentStrainName()}</strong>
+            <span class="mobile-evolution__overview-stat__sublabel">locked until release</span>
+          </div>
+        </section>
+
         {#if $game.visibility.statsPanel}
+        {@const virulenceSynergy = getStrainSynergyLabel($game.strain, 'virulence')}
+        {@const resilienceSynergy = getStrainSynergyLabel($game.strain, 'resilience')}
+        {@const complexitySynergy = getStrainSynergyLabel($game.strain, 'complexity')}
         <section class="mobile-evolution__section-label">CORE_ATTRIBUTES</section>
 
         <section class="mobile-attribute-card">
           <div class="mobile-attribute-card__header">
             <span>VIRULENCE [V: {$game.stats.virulence}]</span>
             <div class="mobile-attribute-card__header-side">
+              {#if virulenceSynergy}<span class="synergy-tag synergy-tag--{virulenceSynergy}" title={virulenceSynergy === 'synergy' ? 'Amplified by current strain' : virulenceSynergy === 'opposition' ? 'Penalized by current strain' : 'Balanced interaction with current strain'}>{virulenceSynergy === 'synergy' ? '⚡' : virulenceSynergy === 'opposition' ? '△' : '○'} [{virulenceSynergy.toUpperCase()}]</span>{/if}
               <span>EXPANSION ENGINE</span>
               <button class="mobile-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('virulence')}>+</button>
             </div>
           </div>
           <p>Aggressive spread protocol. Increases click-power efficiency by 15% per rank.</p>
+          {#if $game.mutationPoints > 0}
+            {@const currentBonus = getEffectiveStatBonus($game.stats.virulence, BALANCE.VIRULENCE_CLICK_BONUS_PER_POINT, $game.strain, 'virulence', $game.geneticMemoryStats)}
+            {@const nextBonus = getEffectiveStatBonus($game.stats.virulence + 1, BALANCE.VIRULENCE_CLICK_BONUS_PER_POINT, $game.strain, 'virulence', $game.geneticMemoryStats)}
+            {@const increase = ((nextBonus - currentBonus) / currentBonus * 100) || (nextBonus * 100)}
+            <p class="stat-preview">Next: Click power +{isFinite(increase) ? increase.toFixed(1) + '%' : '—'}</p>
+          {/if}
         </section>
 
         <section class="mobile-attribute-card">
           <div class="mobile-attribute-card__header">
             <span>RESILIENCE [R: {$game.stats.resilience}]</span>
             <div class="mobile-attribute-card__header-side">
+              {#if resilienceSynergy}<span class="synergy-tag synergy-tag--{resilienceSynergy}" title={resilienceSynergy === 'synergy' ? 'Amplified by current strain' : resilienceSynergy === 'opposition' ? 'Penalized by current strain' : 'Balanced interaction with current strain'}>{resilienceSynergy === 'synergy' ? '⚡' : resilienceSynergy === 'opposition' ? '△' : '○'} [{resilienceSynergy.toUpperCase()}]</span>{/if}
               <span>SURVIVAL MESH</span>
               <button class="mobile-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('resilience')}>+</button>
             </div>
           </div>
           <p>Cellular wall density. Reduces system defense resistance by 8% per rank.</p>
+          {#if $game.mutationPoints > 0}
+            {@const currentBonus = getEffectiveStatBonus($game.stats.resilience, BALANCE.RESILIENCE_DEFENSE_PER_POINT, $game.strain, 'resilience', $game.geneticMemoryStats)}
+            {@const nextBonus = getEffectiveStatBonus($game.stats.resilience + 1, BALANCE.RESILIENCE_DEFENSE_PER_POINT, $game.strain, 'resilience', $game.geneticMemoryStats)}
+            {@const increase = ((nextBonus - currentBonus) * 100) || (nextBonus * 100)}
+            <p class="stat-preview">Next: Defense mitigation +{isFinite(increase) ? increase.toFixed(1) + '%' : '—'}</p>
+          {/if}
         </section>
 
         <section class="mobile-attribute-card">
           <div class="mobile-attribute-card__header">
             <span>COMPLEXITY [C: {$game.stats.complexity}]</span>
             <div class="mobile-attribute-card__header-side">
+              {#if complexitySynergy}<span class="synergy-tag synergy-tag--{complexitySynergy}" title={complexitySynergy === 'synergy' ? 'Amplified by current strain' : complexitySynergy === 'opposition' ? 'Penalized by current strain' : 'Balanced interaction with current strain'}>{complexitySynergy === 'synergy' ? '⚡' : complexitySynergy === 'opposition' ? '△' : '○'} [{complexitySynergy.toUpperCase()}]</span>{/if}
               <span>COGNITIVE ARCH</span>
               <button class="mobile-attribute-card__button" disabled={$game.mutationPoints <= 0} type="button" on:click={() => game.allocateStat('complexity')}>+</button>
             </div>
           </div>
           <p>Synaptic mapping. Unlocks advanced synergy pathways and multi-spore logic.</p>
+          {#if $game.mutationPoints > 0}
+            {@const currentBonus = getEffectiveStatBonus($game.stats.complexity, BALANCE.COMPLEXITY_PASSIVE_BONUS_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
+            {@const nextBonus = getEffectiveStatBonus($game.stats.complexity + 1, BALANCE.COMPLEXITY_PASSIVE_BONUS_PER_POINT, $game.strain, 'complexity', $game.geneticMemoryStats)}
+            {@const increase = ((nextBonus - currentBonus) * 100) || (nextBonus * 100)}
+            <p class="stat-preview">Next: Passive BPS +{isFinite(increase) ? increase.toFixed(1) + '%' : '—'}</p>
+          {/if}
         </section>
+
+        <div class="mobile-evolution__readiness-banner">STATUS :: {getReadinessStatus()}</div>
         {/if}
 
         {#if $game.visibility.strainPrompt || $game.visibility.statsPanel}
         <TerminalPanel title="STRAIN STATUS" tag="⌘" variant="low" className="mobile-card mobile-evolution__strain" bleedHeader={true}>
           <div class="mobile-evolution__strain-inner">
-            <p class="mobile-evolution__strain-tag">
-              {#if canChooseStrain()}
-                [ FIRST HOST CONSUMED ]
-              {:else}
-                [ CURRENT STRAIN: {getCurrentStrainName()} ]
-              {/if}
-            </p>
-            <p>
-              {#if canChooseStrain()}
-                Genetic threshold met. Core strain mutation ready for selection. Select a dominant phenotype to continue evolution.
-              {:else if getCompletedHosts($game) < 1}
-                Clear the first host to initialize strain selection.
-              {:else}
-                Dominant phenotype established. Mutation path is now being shaped by {getCurrentStrainName()}.
-              {/if}
-            </p>
-
-            {#if $game.strain === 'parasite'}
-              <p>Defense response :: Counterburst windows spike click output after host defenses trigger.</p>
-            {:else if $game.strain === 'symbiote'}
-              <p>Defense response :: Symbiote mesh absorbs a larger share of active defense penalties.</p>
-            {:else if $game.strain === 'saprophyte'}
-              <p>Defense response :: Expiring host defenses leave salvageable biomass behind.</p>
-            {/if}
+            <div class="mobile-evolution__strain-fields">
+              <div class="mobile-evolution__strain-field">
+                <span class="mobile-evolution__strain-field__label">STRAIN</span>
+                <span class="mobile-evolution__strain-field__value" title={!canChooseStrain() && $game.strain !== null ? 'Strain is locked for this run. A new strain can be selected after Spore Release.' : ''}>{getCurrentStrainName()} {#if $game.strain}<span class="strain-active-badge">[ACTIVE]</span>{/if}</span>
+              </div>
+              <div class="mobile-evolution__strain-field">
+                <span class="mobile-evolution__strain-field__label">MUTATION PTS</span>
+                <span class="mobile-evolution__strain-field__value" class:mutation-glow={$game.mutationPoints > 0}>{$game.mutationPoints} available</span>
+              </div>
+              <div class="mobile-evolution__strain-field">
+                <span class="mobile-evolution__strain-field__label">DEFENSE MODE</span>
+                <span class="mobile-evolution__strain-field__value">{#if $game.strain === 'parasite'}Counterburst windows spike click output after host defenses trigger.{:else if $game.strain === 'symbiote'}Symbiote mesh absorbs a larger share of active defense penalties.{:else if $game.strain === 'saprophyte'}Expiring host defenses leave salvageable biomass behind.{:else}No strain selected{/if}</span>
+              </div>
+              <div class="mobile-evolution__strain-field">
+                <span class="mobile-evolution__strain-field__label">STATUS</span>
+                <span class="mobile-evolution__strain-field__value">{#if canChooseStrain()}SELECTION PROTOCOL UNLOCKED — Choose a dominant phenotype{:else if getCompletedHosts($game) < 1}Awaiting first host consumption{:else}LOCKED IN — build-specific systems now layered{/if}</span>
+              </div>
+            </div>
 
             {#if canChooseStrain()}
               <div class="mobile-strain-list">
@@ -2153,6 +2275,7 @@
                   >
                     <strong>{strain.name.toUpperCase()}</strong>
                     <span>{strain.summary}</span>
+                    <small>{strain.signature}</small>
                   </button>
                 {/each}
               </div>
@@ -2196,38 +2319,52 @@
             <p class="skill-panel-header__desc">Active mutation purchases. Require attribute rank + Biomass cost.</p>
           </div>
           <div class="mobile-mutation-list">
-            {#each skillDefinitions as skill}
-              <button
-                class="mobile-mutation-row"
-                class:mobile-mutation-row--purchased={hasSkill(skill.id)}
-                class:mobile-mutation-row--locked={!hasSkill(skill.id) && !canBuySkillMap.get(skill.id)}
-                class:mobile-mutation-row--within-reach={isWithinReach(skill)}
-                disabled={!canBuySkillMap.get(skill.id)}
-                type="button"
-                on:click={() => game.purchaseSkill(skill.id)}
-              >
-                <div class="mobile-mutation-row__icon">{skill.branch === 'virulence' ? '◼' : skill.branch === 'resilience' ? '⬢' : '◌'}</div>
-                <div>
-                  <div class="mobile-mutation-row__title-wrap">
-                    <h3>{skill.name}</h3>
-                    <span class="mobile-mutation-row__badge" class:mobile-mutation-row__badge--integrated={hasSkill(skill.id)} class:mobile-mutation-row__badge--can-buy={canBuySkillMap.get(skill.id) && !hasSkill(skill.id)}>{getSkillBadgeText(skill)}</span>
-                  </div>
-                  <p>{skill.description}</p>
-                  {#if !hasSkill(skill.id)}
-                    <div class="mobile-mutation-row__meta">
-                      <span class="mobile-mutation-row__req" title={`Your current ${skill.branch} rank is ${$game.stats[skill.branch]}. Spend Mutation Points in the Evolution tab to increase it.`}>
-                        REQ: {skill.branch[0].toUpperCase()}:{skill.requiredStat}
-                      </span>
-                      <span class="mobile-mutation-row__cost">
-                        COST: {formatSkillCost(skill.cost)}
-                      </span>
-                    </div>
-                    {#if isWithinReach(skill)}
-                      <span class="mobile-mutation-row__within-reach-label">WITHIN REACH</span>
-                    {/if}
-                  {/if}
+            {#each [1, 3, 5] as tierRank}
+              <div class="mobile-skill-tier">
+                <div class="mobile-skill-tier__label">
+                  <span>TIER {tierRank === 1 ? '1' : tierRank === 3 ? '2' : '3'} — {tierRank === 1 ? 'EARLY ADAPTATION' : tierRank === 3 ? 'DEEP INTEGRATION' : 'APEX MUTATION'}</span>
                 </div>
-              </button>
+                {#each statBranches as branch}
+                  {@const tierSkills = getSkillsForBranch(branch).filter(s => s.requiredStat === tierRank)}
+                  {#each tierSkills as skill}
+                    <button
+                      class="mobile-mutation-row"
+                      class:mobile-mutation-row--purchased={hasSkill(skill.id)}
+                      class:mobile-mutation-row--locked={!hasSkill(skill.id) && !canBuySkillMap.get(skill.id)}
+                      class:mobile-mutation-row--within-reach={isWithinReach(skill)}
+                      class:mobile-mutation-row--tier1={tierRank === 1}
+                      disabled={!canBuySkillMap.get(skill.id)}
+                      type="button"
+                      on:click={() => game.purchaseSkill(skill.id)}
+                    >
+                      {#if tierRank === 1 && !hasSkill(skill.id)}
+                        <span class="mobile-mutation-row__start-here">START HERE</span>
+                      {/if}
+                      <div class="mobile-mutation-row__icon">{skill.branch === 'virulence' ? '◼' : skill.branch === 'resilience' ? '⬢' : '◌'}</div>
+                      <div>
+                        <div class="mobile-mutation-row__title-wrap">
+                          <h3>{skill.name}</h3>
+                          <span class="mobile-mutation-row__badge" class:mobile-mutation-row__badge--integrated={hasSkill(skill.id)} class:mobile-mutation-row__badge--can-buy={canBuySkillMap.get(skill.id) && !hasSkill(skill.id)}>{getSkillBadgeText(skill)}</span>
+                        </div>
+                        <p>{skill.description}</p>
+                        {#if !hasSkill(skill.id)}
+                          <div class="mobile-mutation-row__meta">
+                            <span class="mobile-mutation-row__req" title={`Your current ${skill.branch} rank is ${$game.stats[skill.branch]}. Spend Mutation Points in the Evolution tab to increase it.`}>
+                              REQ: {skill.branch[0].toUpperCase()}:{skill.requiredStat}
+                            </span>
+                            <span class="mobile-mutation-row__cost">
+                              COST: {formatSkillCost(skill.cost)}
+                            </span>
+                          </div>
+                          {#if isWithinReach(skill)}
+                            <span class="mobile-mutation-row__within-reach-label">WITHIN REACH</span>
+                          {/if}
+                        {/if}
+                      </div>
+                    </button>
+                  {/each}
+                {/each}
+              </div>
             {/each}
           </div>
         </TerminalPanel>
@@ -2410,6 +2547,49 @@
           <p>&gt; PROJECTED TOTAL MEMORY: {formatDecimal(getProjectedGeneticMemoryTotal($game))} GAMMA.</p>
         </section>
 
+        <section class="mobile-spore__transmission-block">
+          <span class="mobile-spore__transmission-block__label">TRANSMISSION INTERCEPTED</span>
+          <p class="mobile-spore__transmission-block__text">"{getCurrentHostTransitionSignal()}"</p>
+        </section>
+
+        <TerminalPanel title="GENETIC MEMORY" tag="Γ" variant="low" className="mobile-card" bleedHeader={true}>
+          <div class="mobile-spore__memory-summary">
+            <div class="mobile-spore__memory-summary__row">
+              <span class="mobile-spore__memory-summary__label" title="Genetic Memory (Γ) is earned by completing runs. More hosts consumed and higher stages reached yield more Γ per release.">GENETIC MEMORY</span>
+            </div>
+            <div class="mobile-spore__memory-summary__row">
+              <span class="mobile-spore__memory-summary__value">{formatDecimal($game.geneticMemory)} current</span>
+              <span class="mobile-spore__memory-summary__arrow">→</span>
+              <span class="mobile-spore__memory-summary__value mobile-spore__memory-summary__value--gain">+{formatDecimal(getProjectedGeneticMemoryGain($game))} Γ projected</span>
+              <span class="mobile-spore__memory-summary__equals">=</span>
+              <span class="mobile-spore__memory-summary__value mobile-spore__memory-summary__value--total" title="This permanent multiplier applies to all future runs and compounds with each Spore Release.">{formatDecimal(getProjectedGeneticMemoryTotal($game))} Γ total</span>
+            </div>
+          </div>
+        </TerminalPanel>
+
+        <TerminalPanel title="RELEASE STATUS" tag="?" variant="low" className="mobile-card" bleedHeader={true}>
+          <div class="mobile-spore__reset-persist">
+            <div class="mobile-spore__reset-persist__column mobile-spore__reset-persist__column--resets">
+              <span class="mobile-spore__reset-persist__header">✗ RESETS</span>
+              <ul>
+                <li>Current biomass</li>
+                <li>Owned generators</li>
+                <li>Upgrades applied</li>
+                <li>Strain selection</li>
+              </ul>
+            </div>
+            <div class="mobile-spore__reset-persist__column mobile-spore__reset-persist__column--persists">
+              <span class="mobile-spore__reset-persist__header">✓ PERSISTS</span>
+              <ul>
+                <li>Genetic Memory (Γ)</li>
+                <li>Permanent bonus %</li>
+                <li>Highest stage reached</li>
+                <li>Saprophyte strain (after 1st)</li>
+              </ul>
+            </div>
+          </div>
+        </TerminalPanel>
+
         <section class="mobile-spore__reward">
           <div class="mobile-spore__reward-main">
             <h2>GENETIC MEMORY (Γ) GAIN: +{formatDecimal(getProjectedGeneticMemoryGain($game))}</h2>
@@ -2523,12 +2703,15 @@ MYCELIUM_ROOT_v1`}</pre>
 
   <nav class="mobile-tabbar">
     {#each visibleNavItems as item}
-      <button class:mobile-tabbar__item={true} class:mobile-tabbar__item--active={activeView === item.id} type="button" on:click={() => (activeView = item.id)}>
+      <button
+        class="mobile-tabbar__item"
+        class:mobile-tabbar__item--active={activeView === item.id}
+        class:mobile-tabbar__item--blink={item.id === 'evolution' && $game.mutationPoints > 0}
+        type="button"
+        on:click={() => (activeView = item.id)}
+      >
         <span>{item.symbol}</span>
         <span>{item.label}</span>
-        {#if item.id === 'evolution' && $game.mutationPoints > 0}
-          <span class="mutation-dot"></span>
-        {/if}
       </button>
     {/each}
     <button class="mobile-tabbar__item mobile-tabbar__item--danger" type="button" on:click={resetGameForDebug}>
@@ -2554,9 +2737,123 @@ MYCELIUM_ROOT_v1`}</pre>
             >
               <strong>{strain.name}</strong>
               <span>{strain.summary}</span>
+              {#if $game.unlockedStrains[strain.id]}
+                <div class="strain-stat-block">
+                  <div class="strain-stat-row">
+                    <span class="strain-stat-label">Click Multiplier</span>
+                    <span class="strain-stat-value">{strain.clickModifier.toFixed(1)}×</span>
+                  </div>
+                  <div class="strain-stat-row">
+                    <span class="strain-stat-label">Passive BPS</span>
+                    <span class="strain-stat-value">{strain.passiveModifier.toFixed(1)}×</span>
+                  </div>
+                  <div class="strain-stat-row strain-stat-row--mechanic">
+                    <span class="strain-stat-label">{strain.signature}</span>
+                    {#if strain.id === 'parasite'}
+                      <span class="strain-stat-value strain-stat-value--trigger">{BALANCE.HEMORRHAGIC_BURST_BASE_INTERVAL} clicks → {BALANCE.HEMORRHAGIC_BURST_BASE_MULTIPLIER.toFixed(1)}×</span>
+                    {:else if strain.id === 'symbiote'}
+                      <span class="strain-stat-value strain-stat-value--trigger">{BALANCE.MYCORRHIZAL_BASE_INTERVAL_SECONDS}s → {BALANCE.MYCORRHIZAL_BASE_PULSE_MULTIPLIER.toFixed(1)}×</span>
+                    {:else if strain.id === 'saprophyte'}
+                      <span class="strain-stat-value strain-stat-value--trigger">{(BALANCE.DECOMPOSITION_BASE_CONVERSION_RATE * 100).toFixed(0)}% conversion</span>
+                    {/if}
+                  </div>
+                </div>
+              {:else}
+                <div class="strain-locked-block">
+                  <span>[ LOCKED — Unlocks after first Spore Release ]</span>
+                </div>
+              {/if}
               <small>{strain.signature}</small>
             </button>
           {/each}
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showCurrencyModal}
+    <div class="currency-modal-overlay" role="dialog" aria-modal="true" on:keydown={handleCurrencyModalKeydown} tabindex="-1">
+      <button class="currency-modal-backdrop" type="button" aria-label="Dismiss currency information" on:click={closeCurrencyModal}></button>
+      <div class="currency-modal-panel" role="dialog" aria-modal="true" aria-labelledby="currency-modal-title">
+        <p class="currency-modal-panel__eyebrow">CURRENCY NOTATION</p>
+        <h2 id="currency-modal-title">RESOURCE SYMBOLS</h2>
+        
+        <div class="currency-modal-content">
+          <div class="currency-section">
+            <div class="currency-symbol">
+              <span class="currency-symbol__mark">Ψ</span>
+              <span class="currency-symbol__name">BIOMASS</span>
+            </div>
+            <p class="currency-description">Primary resource. Generated passively by your network and manually via absorption clicks.</p>
+          </div>
+
+          <div class="currency-section">
+            <div class="currency-symbol">
+              <span class="currency-symbol__mark">Γ</span>
+              <span class="currency-symbol__name">GENETIC MEMORY (GAMMA)</span>
+            </div>
+            <p class="currency-description">Prestige currency. Accumulated across Spore Release cycles. Scales future run multipliers.</p>
+          </div>
+
+          <div class="currency-section currency-section--notation">
+            <h3>SCALE NOTATION</h3>
+            <p class="currency-description">Values above 1,000 display in scientific or suffixed notation. Full precision available in the SPORE tab.</p>
+            <div class="notation-tiers">
+              {#each BALANCE.CURRENCY_TIERS as tier}
+                <div class="notation-tier">
+                  <span class="notation-tier__label">{tier.label}</span>
+                  <span class="notation-tier__threshold">≥ {formatBiomass(tier.threshold, true)}</span>
+                </div>
+              {/each}
+            </div>
+          </div>
+        </div>
+
+        <div class="currency-modal-footer">
+          <button class="currency-modal-close" type="button" on:click={closeCurrencyModal}>CLOSE</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showDegradationModal}
+    <div class="degradation-modal-overlay" role="dialog" aria-modal="true" on:keydown={handleDegradationModalKeydown} tabindex="-1">
+      <button class="degradation-modal-backdrop" type="button" aria-label="Dismiss degradation information" on:click={closeDegradationModal}></button>
+      <div class="degradation-modal-panel" role="dialog" aria-modal="true" aria-labelledby="degradation-modal-title">
+        <p class="degradation-modal-panel__eyebrow">DEGRADATION STATUS</p>
+        <h2 id="degradation-modal-title">HOST INTEGRITY</h2>
+        
+        <div class="degradation-modal-content">
+          <p class="degradation-intro">Host degradation represents how deeply the mycelium has compromised this host. At 100%, the host is consumed and you advance to the next stage.</p>
+
+          <div class="degradation-status-list">
+            <div class="degradation-status-item">
+              <div class="degradation-status-header">
+                <span class="degradation-status-badge degradation-status-badge--stable">STABLE</span>
+              </div>
+              <p class="degradation-status-description">{BALANCE.DEGRADATION_STATUS_LABELS.stable}</p>
+            </div>
+
+            <div class="degradation-status-item">
+              <div class="degradation-status-header">
+                <span class="degradation-status-badge degradation-status-badge--accelerating">ACCELERATING</span>
+              </div>
+              <p class="degradation-status-description">{BALANCE.DEGRADATION_STATUS_LABELS.accelerating}</p>
+            </div>
+
+            <div class="degradation-status-item">
+              <div class="degradation-status-header">
+                <span class="degradation-status-badge degradation-status-badge--critical">CRITICAL</span>
+              </div>
+              <p class="degradation-status-description">{BALANCE.DEGRADATION_STATUS_LABELS.critical}</p>
+            </div>
+          </div>
+
+          <p class="degradation-note">{BALANCE.DEGRADATION_STATUS_LABELS.note}</p>
+        </div>
+
+        <div class="degradation-modal-footer">
+          <button class="degradation-modal-close" type="button" on:click={closeDegradationModal}>CLOSE</button>
         </div>
       </div>
     </div>

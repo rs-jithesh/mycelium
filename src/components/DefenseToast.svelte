@@ -84,7 +84,7 @@
 
 <style>
   .toast-container {
-    position: absolute;
+    position: fixed;
     bottom: 20px;
     left: 20px;
     display: flex;
@@ -163,6 +163,7 @@
 
   @media (min-width: 768px) {
     .toast-container {
+      position: fixed;
       bottom: 20px;
       left: 20px;
     }
@@ -170,6 +171,7 @@
 
   @media (max-width: 767px) {
     .toast-container {
+      position: fixed;
       bottom: 16px;
       left: 16px;
       right: 16px;
